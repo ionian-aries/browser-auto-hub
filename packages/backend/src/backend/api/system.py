@@ -7,8 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.database import get_session
-from backend.models.execution import TaskExecution
-from backend.models.pipeline import Pipeline
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 
