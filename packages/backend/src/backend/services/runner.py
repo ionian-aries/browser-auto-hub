@@ -87,7 +87,9 @@ async def _run_execution(
 ) -> None:
     async with session_factory() as session:
         result = await session.execute(
-            select(TaskExecution).where(TaskExecution.id == execution_id)
+            select(TaskExecution)
+            .where(TaskExecution.id == execution_id)
+            .with_for_update()
         )
         execution = result.scalar_one_or_none()
         if execution is None:
@@ -106,7 +108,7 @@ async def _run_execution(
             await session.commit()
             return
 
-        # Concurrency check
+        # Concurrency check (row locked — prevents TOCTOU race)
         if not await _check_concurrency(
             session, pipeline_db.id, pipeline_db.max_concurrent
         ):
@@ -117,7 +119,7 @@ async def _run_execution(
             await session.commit()
             return
 
-        # Start execution
+        # Start execution (commit releases the lock)
         execution.status = "running"
         execution.started_at = datetime.now(timezone.utc)
         await session.commit()

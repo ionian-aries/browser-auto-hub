@@ -30,6 +30,9 @@ class PipelineRegistry:
         """Recursively import all modules in engine.pipelines to trigger registration."""
         import engine.pipelines as pipelines_pkg
 
+        # If registry was cleared (test scenario), we need to reload cached modules
+        need_reload = not cls._pipelines
+
         for importer, modname, ispkg in pkgutil.walk_packages(
             pipelines_pkg.__path__, prefix="engine.pipelines."
         ):
@@ -38,7 +41,8 @@ class PipelineRegistry:
                 continue
             try:
                 if modname in sys.modules:
-                    importlib.reload(sys.modules[modname])
+                    if need_reload:
+                        importlib.reload(sys.modules[modname])
                 else:
                     importlib.import_module(modname)
             except ImportError:

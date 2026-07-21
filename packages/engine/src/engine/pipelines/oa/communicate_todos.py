@@ -47,6 +47,11 @@ _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
                 "default": 500,
                 "description": "操作后稳定等待(ms)",
             },
+            "max_pages": {
+                "type": "integer",
+                "default": 100,
+                "description": "最大采集页数（防止死循环）",
+            },
         },
         "required": ["username", "password"],
     },
@@ -58,6 +63,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
         config.setdefault("page_load_timeout", 15000)
         config.setdefault("element_visible_timeout", 5000)
         config.setdefault("action_settle_timeout", 500)
+        config.setdefault("max_pages", 100)
 
         records: list[dict] = []
         stats = {"total": 0, "inserted": 0, "skipped": 0, "attachment_failures": 0}
@@ -90,9 +96,13 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 existing_ids = {row[0] for row in result.fetchall()}
 
                 # Step 5: Crawl all pages
+                max_pages = config["max_pages"]
                 page_num = 0
                 while True:
                     page_num += 1
+                    if page_num > max_pages:
+                        await ctx.logger.step("crawl", f"已达最大页数限制 ({max_pages})，停止采集")
+                        break
                     await ctx.logger.step("crawl", f"采集第 {page_num} 页")
 
                     links = frame.locator(_TITLE_LINK_SELECTOR)
@@ -303,7 +313,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 object_key = f"{settings.minio_object_prefix}/attachments/{task_id}/{filename}"
                 ctx.minio.upload(object_key, file_bytes)
                 presign = ctx.minio.presign_url(object_key)
-                attachments.append({"filename": filename, "url": presign, "ok": True})
+                attachments.append({"filename": filename, "object_key": object_key, "url": presign, "ok": True})
             except Exception as e:
                 stats["attachment_failures"] += 1
                 attachments.append({"filename": filename, "url": "", "ok": False, "error": str(e)})
