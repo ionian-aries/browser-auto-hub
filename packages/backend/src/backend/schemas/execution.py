@@ -10,17 +10,18 @@ class ExecutionCreate(BaseModel):
 
 
 class ExecutionResponse(BaseModel):
-    id: int
-    pipeline_id: int
+    id: str
+    pipeline_id: str
     pipeline_name: str | None = None
-    schedule_id: int | None
+    schedule_id: str | None = None
     trigger_type: str
     status: str
-    config: dict | None
-    started_at: datetime | None
-    finished_at: datetime | None
-    error_message: str | None
-    result_summary: dict | None
+    config: dict | None = None
+    retry_count: int = 0
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_message: str | None = None
+    result_summary: dict | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 
 @router.get("/{artifact_id}/download")
 async def download_file(
-    artifact_id: int, session: AsyncSession = Depends(get_session)
+    artifact_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
         select(TaskArtifact).where(TaskArtifact.id == artifact_id)

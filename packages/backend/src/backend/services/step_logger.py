@@ -12,7 +12,7 @@ from engine.logger import StepLogger
 class DbStepLogger(StepLogger):
     """StepLogger that writes to DB and broadcasts via SSE."""
 
-    def __init__(self, execution_id: int, session: AsyncSession, storage: MinioStorage):
+    def __init__(self, execution_id: str, session: AsyncSession, storage: MinioStorage):
         super().__init__(execution_id)
         self._session = session
         self._storage = storage

@@ -29,11 +29,11 @@ async def create_schedule(
 ):
     # Resolve pipeline
     result = await session.execute(
-        select(Pipeline).where(Pipeline.name == body.pipeline_name)
+        select(Pipeline).where(Pipeline.id == body.pipeline_id)
     )
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
-        raise HTTPException(404, f"Pipeline '{body.pipeline_name}' not found")
+        raise HTTPException(404, f"Pipeline '{body.pipeline_id}' not found")
 
     schedule = Schedule(
         pipeline_id=pipeline.id,
@@ -43,6 +43,8 @@ async def create_schedule(
         interval_seconds=body.interval_seconds,
         config_override=body.config_override,
         enabled=body.enabled,
+        max_retries=body.max_retries,
+        retry_delay_seconds=body.retry_delay_seconds,
     )
     session.add(schedule)
     await session.commit()
@@ -54,7 +56,7 @@ async def create_schedule(
 
 @router.put("/{schedule_id}", response_model=ScheduleResponse)
 async def update_schedule(
-    schedule_id: int, body: ScheduleUpdate, session: AsyncSession = Depends(get_session)
+    schedule_id: str, body: ScheduleUpdate, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(select(Schedule).where(Schedule.id == schedule_id))
     schedule = result.scalar_one_or_none()
@@ -71,7 +73,7 @@ async def update_schedule(
 
 @router.delete("/{schedule_id}", status_code=204)
 async def delete_schedule(
-    schedule_id: int, session: AsyncSession = Depends(get_session)
+    schedule_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(select(Schedule).where(Schedule.id == schedule_id))
     schedule = result.scalar_one_or_none()
@@ -83,7 +85,7 @@ async def delete_schedule(
 
 @router.patch("/{schedule_id}/toggle", response_model=ScheduleResponse)
 async def toggle_schedule(
-    schedule_id: int, session: AsyncSession = Depends(get_session)
+    schedule_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(select(Schedule).where(Schedule.id == schedule_id))
     schedule = result.scalar_one_or_none()

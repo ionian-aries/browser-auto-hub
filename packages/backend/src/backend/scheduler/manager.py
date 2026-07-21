@@ -34,7 +34,7 @@ class SchedulerManager:
         if schedule.enabled:
             await self._register_job(schedule)
 
-    async def remove_schedule(self, schedule_id: int) -> None:
+    async def remove_schedule(self, schedule_id: str) -> None:
         job_id = f"schedule_{schedule_id}"
         try:
             await self._scheduler.remove_job(job_id)
@@ -75,7 +75,7 @@ class SchedulerManager:
             return IntervalTrigger(seconds=schedule.interval_seconds)
         return None
 
-    async def _execute_scheduled(self, schedule_id: int, pipeline_id: int) -> None:
+    async def _execute_scheduled(self, schedule_id: str, pipeline_id: str) -> None:
         from backend.services.runner import dispatch_execution
 
         async with self._session_factory() as session:

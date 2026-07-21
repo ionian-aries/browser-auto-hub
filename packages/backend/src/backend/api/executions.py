@@ -68,7 +68,7 @@ async def list_executions(
 
 @router.get("/{execution_id}", response_model=ExecutionResponse)
 async def get_execution(
-    execution_id: int, session: AsyncSession = Depends(get_session)
+    execution_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
         select(TaskExecution).where(TaskExecution.id == execution_id)
@@ -81,7 +81,7 @@ async def get_execution(
 
 @router.get("/{execution_id}/logs")
 async def get_execution_logs(
-    execution_id: int, session: AsyncSession = Depends(get_session)
+    execution_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
         select(TaskLog)
@@ -102,7 +102,7 @@ async def get_execution_logs(
 
 
 @router.get("/{execution_id}/logs/stream")
-async def stream_execution_logs(execution_id: int):
+async def stream_execution_logs(execution_id: str):
     queue = log_broadcaster.subscribe(execution_id)
 
     async def event_generator():
@@ -122,7 +122,7 @@ async def stream_execution_logs(execution_id: int):
 
 @router.post("/{execution_id}/cancel", response_model=ExecutionResponse)
 async def cancel_execution(
-    execution_id: int, session: AsyncSession = Depends(get_session)
+    execution_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
         select(TaskExecution).where(TaskExecution.id == execution_id)
@@ -141,7 +141,7 @@ async def cancel_execution(
 
 @router.get("/{execution_id}/artifacts")
 async def get_execution_artifacts(
-    execution_id: int, session: AsyncSession = Depends(get_session)
+    execution_id: str, session: AsyncSession = Depends(get_session)
 ):
     from backend.models.execution import TaskArtifact
 

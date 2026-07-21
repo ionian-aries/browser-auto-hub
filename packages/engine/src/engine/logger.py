@@ -19,7 +19,7 @@ class StepLogger:
     The base implementation stores logs in memory for testing.
     """
 
-    def __init__(self, execution_id: int):
+    def __init__(self, execution_id: str):
         self.execution_id = execution_id
         self.entries: list[LogEntry] = []
 

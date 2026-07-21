@@ -13,7 +13,7 @@ from engine.registry import PipelineRegistry
 
 
 async def dispatch_execution(
-    execution_id: int,
+    execution_id: str,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Run a pipeline execution in the background."""
@@ -21,7 +21,7 @@ async def dispatch_execution(
 
 
 async def _run_execution(
-    execution_id: int,
+    execution_id: str,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with session_factory() as session:

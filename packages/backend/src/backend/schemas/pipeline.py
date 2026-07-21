@@ -4,12 +4,14 @@ from pydantic import BaseModel
 
 
 class PipelineResponse(BaseModel):
-    id: int
+    id: str
     name: str
     display_name: str
     description: str
     trigger_modes: list[str]
-    config_schema: dict | None
+    config_schema: dict | None = None
+    max_concurrent: int
+    timeout_seconds: int
     status: str
     created_at: datetime
     updated_at: datetime
