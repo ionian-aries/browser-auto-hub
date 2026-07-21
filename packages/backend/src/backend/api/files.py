@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,8 +9,18 @@ from backend.storage.minio_client import MinioStorage
 router = APIRouter(prefix="/api/files", tags=["files"])
 
 
+@router.get("/presign")
+async def presign_url(key: str = Query(..., description="MinIO object key")):
+    try:
+        storage = MinioStorage()
+        url = storage.presign_url(key)
+        return {"url": url}
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate presign URL: {e}")
+
+
 @router.get("/{artifact_id}/download")
-async def download_file(
+async def download_artifact(
     artifact_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
@@ -19,12 +28,9 @@ async def download_file(
     )
     artifact = result.scalar_one_or_none()
     if artifact is None:
-        raise HTTPException(404, "File not found")
+        raise HTTPException(404, "Artifact not found")
 
     storage = MinioStorage()
-    data = storage.download(artifact.minio_key)
-    return Response(
-        content=data,
-        media_type=artifact.content_type,
-        headers={"Content-Disposition": f'attachment; filename="{artifact.file_name}"'},
-    )
+    url = storage.presign_url(artifact.minio_key)
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url)
