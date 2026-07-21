@@ -6,13 +6,27 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
-from backend.database import get_session
+from backend.database import _get_engine, get_session
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
 _start_time = time.time()
+
+
+def _get_db_pool_info() -> dict:
+    """Get actual DB pool stats from the engine."""
+    try:
+        engine = _get_engine()
+        pool = engine.pool
+        return {
+            "pool_size": pool.size(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+        }
+    except Exception:
+        return {"pool_size": 5, "checked_out": 0, "overflow": 0}
 
 
 @router.get("/health")
@@ -36,7 +50,7 @@ async def system_info(session: AsyncSession = Depends(get_session)):
         "uptime_seconds": int(time.time() - _start_time),
         "scheduler_status": scheduler_status,
         "active_schedules": active_schedules,
-        "db_pool": {"pool_size": 5, "checked_out": 0, "overflow": 0},
+        "db_pool": _get_db_pool_info(),
     }
 
 

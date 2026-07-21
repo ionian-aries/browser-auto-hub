@@ -28,6 +28,7 @@ export function ExecutionDetail() {
   const logEndRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
   const stepColorMap = useRef(new Map<string, string>());
+  const loadedKeysRef = useRef(new Set<string>());
 
   const { data: execution } = useQuery({
     queryKey: ["execution", id],
@@ -81,8 +82,9 @@ export function ExecutionDetail() {
   // Load screenshot URLs
   useEffect(() => {
     const keys = logs.filter((l) => l.screenshot_key).map((l) => l.screenshot_key!);
-    const newKeys = keys.filter((k) => !screenshots[k]);
+    const newKeys = keys.filter((k) => !loadedKeysRef.current.has(k));
     newKeys.forEach((key) => {
+      loadedKeysRef.current.add(key);
       fileApi.presign(key).then(({ url }) => {
         setScreenshots((prev) => ({ ...prev, [key]: url }));
       });

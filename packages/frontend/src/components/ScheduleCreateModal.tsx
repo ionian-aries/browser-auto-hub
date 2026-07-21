@@ -1,4 +1,4 @@
-import { Form, Input, InputNumber, Modal, Radio } from "antd";
+import { Form, Input, InputNumber, Modal, Radio, message } from "antd";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { scheduleApi } from "../api/client";
 import type { Schedule } from "../types";
@@ -40,7 +40,24 @@ export function ScheduleCreateModal({ pipelineId, open, onClose, editSchedule }:
         form={form}
         layout="vertical"
         initialValues={editSchedule || { trigger_type: "cron", max_retries: 0, retry_delay_seconds: 60 }}
-        onFinish={(values) => createMutation.mutate(values)}
+        onFinish={(values) => {
+          if (values.config_override && typeof values.config_override === "string") {
+            const raw = values.config_override.trim();
+            if (raw === "") {
+              values.config_override = null;
+            } else {
+              try {
+                values.config_override = JSON.parse(raw);
+              } catch {
+                message.error("配置覆盖必须是合法的 JSON");
+                return;
+              }
+            }
+          } else if (!values.config_override) {
+            values.config_override = null;
+          }
+          createMutation.mutate(values);
+        }}
       >
         <Form.Item name="name" label="调度名称" rules={[{ required: true }]}>
           <Input placeholder="如：工作日早8点采集" />

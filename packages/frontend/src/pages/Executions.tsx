@@ -15,6 +15,7 @@ export function Executions() {
   const navigate = useNavigate();
   const [pipelineFilter, setPipelineFilter] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string[] | undefined>();
+  const [dateRange, setDateRange] = useState<[Date, Date] | null>(null);
   const [page, setPage] = useState(1);
 
   const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: pipelineApi.list });
@@ -54,15 +55,29 @@ export function Executions() {
         </Select>
         <RangePicker
           onChange={(dates) => {
-            // Pass date range to API when backend supports it
-            void dates;
+            if (dates && dates[0] && dates[1]) {
+              setDateRange([dates[0].toDate(), dates[1].toDate()]);
+            } else {
+              setDateRange(null);
+            }
             setPage(1);
           }}
         />
       </div>
 
       <Table
-        dataSource={executions}
+        dataSource={
+          executions && dateRange
+            ? executions.filter((e: Execution) => {
+                const created = e.created_at ? new Date(e.created_at).getTime() : 0;
+                const startOfDay = new Date(dateRange[0]);
+                startOfDay.setHours(0, 0, 0, 0);
+                const endOfDay = new Date(dateRange[1]);
+                endOfDay.setHours(23, 59, 59, 999);
+                return created >= startOfDay.getTime() && created <= endOfDay.getTime();
+              })
+            : executions
+        }
         rowKey="id"
         loading={isLoading}
         onRow={(record) => ({
