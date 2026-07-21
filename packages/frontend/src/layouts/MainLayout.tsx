@@ -2,7 +2,6 @@ import { Layout, Menu } from "antd";
 import {
   DashboardOutlined,
   NodeIndexOutlined,
-  ClockCircleOutlined,
   UnorderedListOutlined,
   SettingOutlined,
 } from "@ant-design/icons";
@@ -11,9 +10,8 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 const { Sider, Content } = Layout;
 
 const menuItems = [
-  { key: "/", icon: <DashboardOutlined />, label: "仪表盘" },
+  { key: "/", icon: <DashboardOutlined />, label: "看板" },
   { key: "/pipelines", icon: <NodeIndexOutlined />, label: "Pipeline" },
-  { key: "/schedules", icon: <ClockCircleOutlined />, label: "调度管理" },
   { key: "/executions", icon: <UnorderedListOutlined />, label: "执行记录" },
   { key: "/settings", icon: <SettingOutlined />, label: "系统设置" },
 ];
@@ -21,6 +19,10 @@ const menuItems = [
 export function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  const selectedKey = menuItems
+    .filter((item) => location.pathname.startsWith(item.key) && item.key !== "/")
+    .sort((a, b) => b.key.length - a.key.length)[0]?.key || "/";
 
   return (
     <Layout style={{ minHeight: "100vh" }}>
@@ -31,7 +33,7 @@ export function MainLayout() {
         <Menu
           theme="dark"
           mode="inline"
-          selectedKeys={[location.pathname]}
+          selectedKeys={[selectedKey]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
         />

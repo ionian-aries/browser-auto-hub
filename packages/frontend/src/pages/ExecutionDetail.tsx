@@ -7,7 +7,7 @@ import type { LogEntry } from "../types";
 
 export function ExecutionDetail() {
   const { id } = useParams<{ id: string }>();
-  const executionId = Number(id);
+  const executionId = id!;
   const { data: execution } = useQuery({
     queryKey: ["execution", executionId],
     queryFn: () => executionApi.get(executionId),
