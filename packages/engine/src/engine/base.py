@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from engine.logger import StepLogger
+    from engine.context import ExecutionContext
 
 
 @dataclass
@@ -27,5 +27,5 @@ class BasePipeline(ABC):
     metadata: PipelineMetadata
 
     @abstractmethod
-    async def execute(self, config: dict, logger: "StepLogger") -> PipelineResult:
+    async def execute(self, config: dict, ctx: "ExecutionContext") -> PipelineResult:
         ...

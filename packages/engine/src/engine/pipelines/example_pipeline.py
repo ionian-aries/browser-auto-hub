@@ -1,5 +1,5 @@
 from engine.base import BasePipeline, PipelineResult
-from engine.logger import StepLogger
+from engine.context import ExecutionContext
 from engine.registry import register_pipeline
 
 
@@ -16,7 +16,7 @@ from engine.registry import register_pipeline
     },
 )
 class ExamplePipeline(BasePipeline):
-    async def execute(self, config: dict, logger: StepLogger) -> PipelineResult:
+    async def execute(self, config: dict, ctx: ExecutionContext) -> PipelineResult:
         msg = config.get("message", "hello")
-        await logger.step("greet", f"Example says: {msg}")
+        await ctx.logger.step("greet", f"Example says: {msg}")
         return PipelineResult(success=True, summary={"message": msg})
