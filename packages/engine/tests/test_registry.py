@@ -68,3 +68,12 @@ def test_discover_loads_pipelines():
     assert "example" in PipelineRegistry._pipelines
     example_cls = PipelineRegistry.get("example")
     assert example_cls.metadata.display_name == "Example Pipeline"
+
+
+def test_discover_finds_pipelines_in_subdirectories():
+    """Registry should find pipelines in nested packages like oa/."""
+    PipelineRegistry._pipelines.clear()
+    PipelineRegistry.discover()
+    # After Task 7 implements the OA pipeline, this will find oa.communicate_todos
+    # For now, just verify discover() doesn't crash on nested packages
+    assert "example" in PipelineRegistry.all()

@@ -1,5 +1,6 @@
 import importlib
 import pkgutil
+import sys
 from typing import TYPE_CHECKING
 
 from engine.base import BasePipeline, PipelineMetadata
@@ -26,11 +27,22 @@ class PipelineRegistry:
 
     @classmethod
     def discover(cls) -> None:
-        """Import all modules in engine.pipelines to trigger registration."""
+        """Recursively import all modules in engine.pipelines to trigger registration."""
         import engine.pipelines as pipelines_pkg
 
-        for importer, modname, ispkg in pkgutil.iter_modules(pipelines_pkg.__path__):
-            importlib.import_module(f"engine.pipelines.{modname}")
+        for importer, modname, ispkg in pkgutil.walk_packages(
+            pipelines_pkg.__path__, prefix="engine.pipelines."
+        ):
+            # Skip __init__ and shared/ modules (no pipelines there)
+            if modname.endswith("__init__") or ".shared." in modname:
+                continue
+            try:
+                if modname in sys.modules:
+                    importlib.reload(sys.modules[modname])
+                else:
+                    importlib.import_module(modname)
+            except ImportError:
+                pass  # Skip modules with missing optional dependencies
 
 
 def register_pipeline(**kwargs):
