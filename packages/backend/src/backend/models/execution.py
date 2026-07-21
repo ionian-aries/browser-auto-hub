@@ -1,19 +1,24 @@
+import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base
 
 
+def _generate_uuid() -> str:
+    return str(uuid.uuid4())
+
+
 class TaskExecution(Base):
     __tablename__ = "task_executions"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    pipeline_id: Mapped[int] = mapped_column(ForeignKey("pipelines.id"))
-    schedule_id: Mapped[int | None] = mapped_column(
-        ForeignKey("schedules.id"), nullable=True
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_generate_uuid)
+    pipeline_id: Mapped[str] = mapped_column(String(36), ForeignKey("pipelines.id"))
+    schedule_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("schedules.id"), nullable=True
     )
     trigger_type: Mapped[str] = mapped_column(
         Enum("scheduled", "api", "manual", name="execution_trigger_type")
@@ -23,6 +28,7 @@ class TaskExecution(Base):
         default="pending",
     )
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -36,12 +42,17 @@ class TaskExecution(Base):
     logs = relationship("TaskLog", back_populates="execution")
     artifacts = relationship("TaskArtifact", back_populates="execution")
 
+    def __init__(self, **kwargs):
+        kwargs.setdefault("status", "pending")
+        kwargs.setdefault("retry_count", 0)
+        super().__init__(**kwargs)
+
 
 class TaskLog(Base):
     __tablename__ = "task_logs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    execution_id: Mapped[int] = mapped_column(ForeignKey("task_executions.id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_generate_uuid)
+    execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("task_executions.id"))
     timestamp: Mapped[datetime] = mapped_column(MySQLDateTime(fsp=6), server_default=func.now())
     level: Mapped[str] = mapped_column(
         Enum("info", "warn", "error", name="log_level"), default="info"
@@ -53,16 +64,20 @@ class TaskLog(Base):
 
     execution = relationship("TaskExecution", back_populates="logs")
 
+    def __init__(self, **kwargs):
+        kwargs.setdefault("level", "info")
+        super().__init__(**kwargs)
+
 
 class TaskArtifact(Base):
     __tablename__ = "task_artifacts"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    execution_id: Mapped[int] = mapped_column(ForeignKey("task_executions.id"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_generate_uuid)
+    execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("task_executions.id"))
     file_name: Mapped[str] = mapped_column(String(500))
     minio_key: Mapped[str] = mapped_column(String(1000))
     content_type: Mapped[str] = mapped_column(String(100))
-    size_bytes: Mapped[int] = mapped_column(BigInteger)
+    size_bytes: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now()
     )
