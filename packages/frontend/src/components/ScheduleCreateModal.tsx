@@ -1,20 +1,25 @@
-import { Form, Input, InputNumber, Modal, Radio, Select } from "antd";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { pipelineApi, scheduleApi } from "../api/client";
+import { Form, Input, InputNumber, Modal, Radio } from "antd";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { scheduleApi } from "../api/client";
+import type { Schedule } from "../types";
 
 interface Props {
+  pipelineId: string;
   open: boolean;
   onClose: () => void;
+  editSchedule?: Schedule | null;
 }
 
-export function ScheduleCreateModal({ open, onClose }: Props) {
+export function ScheduleCreateModal({ pipelineId, open, onClose, editSchedule }: Props) {
   const [form] = Form.useForm();
   const queryClient = useQueryClient();
-  const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: pipelineApi.list });
   const triggerType = Form.useWatch("trigger_type", form);
 
-  const mutation = useMutation({
-    mutationFn: scheduleApi.create,
+  const createMutation = useMutation({
+    mutationFn: (values: Record<string, unknown>) =>
+      editSchedule
+        ? scheduleApi.update(editSchedule.id, values as Partial<Schedule>)
+        : scheduleApi.create({ ...values, pipeline_id: pipelineId } as Parameters<typeof scheduleApi.create>[0]),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["schedules"] });
       form.resetFields();
@@ -24,38 +29,48 @@ export function ScheduleCreateModal({ open, onClose }: Props) {
 
   return (
     <Modal
-      title="创建调度"
+      title={editSchedule ? "编辑调度" : "新建调度"}
       open={open}
-      onCancel={onClose}
+      onCancel={() => { form.resetFields(); onClose(); }}
       onOk={() => form.submit()}
-      confirmLoading={mutation.isPending}
+      confirmLoading={createMutation.isPending}
+      destroyOnClose
     >
-      <Form form={form} layout="vertical" onFinish={(values) => mutation.mutate(values)}>
-        <Form.Item name="pipeline_name" label="Pipeline" rules={[{ required: true }]}>
-          <Select placeholder="选择 Pipeline">
-            {pipelines?.filter((p) => p.trigger_modes.some((m) => ["cron", "interval"].includes(m)))
-              .map((p) => <Select.Option key={p.name} value={p.name}>{p.display_name}</Select.Option>)}
-          </Select>
-        </Form.Item>
+      <Form
+        form={form}
+        layout="vertical"
+        initialValues={editSchedule || { trigger_type: "cron", max_retries: 0, retry_delay_seconds: 60 }}
+        onFinish={(values) => createMutation.mutate(values)}
+      >
         <Form.Item name="name" label="调度名称" rules={[{ required: true }]}>
-          <Input placeholder="如：每日 OA 采集" />
+          <Input placeholder="如：工作日早8点采集" />
         </Form.Item>
         <Form.Item name="trigger_type" label="触发方式" rules={[{ required: true }]}>
           <Radio.Group>
             <Radio value="cron">Cron 表达式</Radio>
             <Radio value="interval">固定间隔</Radio>
+            <Radio value="once">单次</Radio>
           </Radio.Group>
         </Form.Item>
         {triggerType === "cron" && (
           <Form.Item name="cron_expr" label="Cron 表达式" rules={[{ required: true }]}>
-            <Input placeholder="0 9 * * * (每天 9 点)" />
+            <Input placeholder="0 8 * * 1-5" />
           </Form.Item>
         )}
         {triggerType === "interval" && (
           <Form.Item name="interval_seconds" label="间隔（秒）" rules={[{ required: true }]}>
-            <InputNumber min={60} placeholder="300" style={{ width: "100%" }} />
+            <InputNumber min={60} style={{ width: "100%" }} />
           </Form.Item>
         )}
+        <Form.Item name="max_retries" label="最大重试次数">
+          <InputNumber min={0} style={{ width: "100%" }} />
+        </Form.Item>
+        <Form.Item name="retry_delay_seconds" label="重试间隔（秒）">
+          <InputNumber min={1} style={{ width: "100%" }} />
+        </Form.Item>
+        <Form.Item name="config_override" label="配置覆盖（JSON，可选）">
+          <Input.TextArea rows={4} placeholder='{"key": "value"}' />
+        </Form.Item>
       </Form>
     </Modal>
   );
