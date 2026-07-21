@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
@@ -64,6 +64,47 @@ async def list_executions(
 
     result = await session.execute(stmt)
     return result.scalars().all()
+
+
+@router.get("/stats")
+async def execution_stats(session: AsyncSession = Depends(get_session)):
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    today_count = await session.scalar(
+        select(func.count()).select_from(TaskExecution).where(
+            TaskExecution.created_at >= today_start
+        )
+    ) or 0
+
+    today_success = await session.scalar(
+        select(func.count()).select_from(TaskExecution).where(
+            TaskExecution.created_at >= today_start,
+            TaskExecution.status == "success",
+        )
+    ) or 0
+
+    today_failed = await session.scalar(
+        select(func.count()).select_from(TaskExecution).where(
+            TaskExecution.created_at >= today_start,
+            TaskExecution.status == "failed",
+        )
+    ) or 0
+
+    running_count = await session.scalar(
+        select(func.count()).select_from(TaskExecution).where(
+            TaskExecution.status == "running"
+        )
+    ) or 0
+
+    success_rate = round(today_success / today_count, 2) if today_count > 0 else 0
+
+    return {
+        "today_count": today_count,
+        "today_success": today_success,
+        "today_failed": today_failed,
+        "success_rate": success_rate,
+        "running_count": running_count,
+    }
 
 
 @router.get("/{execution_id}", response_model=ExecutionResponse)
