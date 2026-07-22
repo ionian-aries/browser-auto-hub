@@ -41,12 +41,66 @@ async def _get_global_run_config(session: AsyncSession) -> dict:
     }
 
 
+async def _get_global_retry_config(session: AsyncSession) -> tuple[int, int]:
+    """run_default_max_retries / run_default_retry_delay_seconds（manual/api 执行的重试依据）。"""
+    result = await session.execute(
+        select(SystemSetting).where(
+            SystemSetting.key.in_(
+                ["run_default_max_retries", "run_default_retry_delay_seconds"]
+            )
+        )
+    )
+    rows = {row.key: row.value for row in result.scalars()}
+
+    def _int(key: str, default: int) -> int:
+        try:
+            return int(rows[key])
+        except (KeyError, TypeError, ValueError):
+            return default
+
+    return (
+        _int("run_default_max_retries", 0),
+        _int("run_default_retry_delay_seconds", 60),
+    )
+
+
+# execution_id → 正在运行的 asyncio Task（cancel 端点据此真正停止执行）
+_running_tasks: dict[str, asyncio.Task] = {}
+# retry / redispatch 等后台 sleeper task：防 GC、便于监督
+_background_tasks: set[asyncio.Task] = set()
+
+_BUSY_REDISPATCH_DELAY = 10  # seconds
+
+
+def _track_background(task: asyncio.Task) -> None:
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
 async def dispatch_execution(
     execution_id: str,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     """Run a pipeline execution in the background."""
-    asyncio.create_task(_run_execution(execution_id, session_factory))
+    task = asyncio.create_task(_run_execution(execution_id, session_factory))
+    _running_tasks[execution_id] = task
+    task.add_done_callback(lambda _t: _running_tasks.pop(execution_id, None))
+
+
+def cancel_running_execution(execution_id: str) -> bool:
+    """取消正在运行的执行 task；未在运行返回 False。"""
+    task = _running_tasks.get(execution_id)
+    if task is None or task.done():
+        return False
+    task.cancel()
+    return True
+
+
+async def _redispatch_later(
+    execution_id: str, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    await asyncio.sleep(_BUSY_REDISPATCH_DELAY)
+    await dispatch_execution(execution_id, session_factory)
 
 
 async def _check_concurrency(
@@ -70,25 +124,31 @@ async def _schedule_retry(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Schedule a retry if schedule allows it."""
-    if execution.schedule_id is None:
-        return  # manual/api triggers don't auto-retry
+    """Schedule a retry if limits allow.
 
-    result = await session.execute(
-        select(Schedule).where(Schedule.id == execution.schedule_id)
-    )
-    schedule = result.scalar_one_or_none()
-    if schedule is None:
-        return
+    scheduled 执行按 schedule 的 max_retries/retry_delay_seconds；
+    manual/api 执行按全局 run_default_* 配置（默认为 0 = 不重试）。
+    """
+    if execution.schedule_id is not None:
+        result = await session.execute(
+            select(Schedule).where(Schedule.id == execution.schedule_id)
+        )
+        schedule = result.scalar_one_or_none()
+        if schedule is None:
+            return
+        max_retries = schedule.max_retries
+        retry_delay = schedule.retry_delay_seconds
+    else:
+        max_retries, retry_delay = await _get_global_retry_config(session)
 
-    if execution.retry_count >= schedule.max_retries:
+    if execution.retry_count >= max_retries:
         return  # max retries reached
 
     pipeline_id = execution.pipeline_id
     schedule_id = execution.schedule_id
+    trigger_type = execution.trigger_type  # 保留原始触发方式
     config = execution.config
     retry_count = execution.retry_count + 1
-    retry_delay = schedule.retry_delay_seconds
 
     async def _retry_after_delay():
         await asyncio.sleep(retry_delay)
@@ -96,7 +156,7 @@ async def _schedule_retry(
             retry_exec = TaskExecution(
                 pipeline_id=pipeline_id,
                 schedule_id=schedule_id,
-                trigger_type="scheduled",
+                trigger_type=trigger_type,
                 config=config,
                 retry_count=retry_count,
             )
@@ -104,7 +164,7 @@ async def _schedule_retry(
             await retry_session.commit()
             await dispatch_execution(retry_exec.id, session_factory)
 
-    asyncio.create_task(_retry_after_delay())
+    _track_background(asyncio.create_task(_retry_after_delay()))
 
 
 async def _run_execution(
@@ -138,11 +198,13 @@ async def _run_execution(
         if not await _check_concurrency(
             session, pipeline_db.id, pipeline_db.max_concurrent
         ):
-            execution.status = "failed"
-            execution.error_message = (
-                "Pipeline busy: max concurrent executions reached"
+            # 保持 pending，延迟重派发；不再制造伪 failed 记录
+            await session.rollback()  # 释放 FOR UPDATE 行锁
+            _track_background(
+                asyncio.create_task(
+                    _redispatch_later(execution_id, session_factory)
+                )
             )
-            await session.commit()
             return
 
         # Start execution (commit releases the lock)
@@ -179,6 +241,11 @@ async def _run_execution(
             execution.result_summary = exec_result.summary
             if exec_result.error:
                 execution.error_message = exec_result.error
+        except asyncio.CancelledError:
+            # cancel 端点取消了本 task：落 cancelled 终态后继续传播
+            execution.status = "cancelled"
+            execution.error_message = "Cancelled by user"
+            raise
         except asyncio.TimeoutError:
             execution.status = "failed"
             execution.error_message = (
@@ -191,17 +258,59 @@ async def _run_execution(
             )
         finally:
             execution.finished_at = datetime.now(timezone.utc)
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception:
+                # session 被 pipeline 污染时的兜底：换全新 session 落终态
+                await session.rollback()
+                await _finalize_via_fresh_session(
+                    session_factory,
+                    execution_id,
+                    status=execution.status,
+                    finished_at=execution.finished_at,
+                    error_message=execution.error_message,
+                    result_summary=execution.result_summary,
+                )
 
             # Retry on failure
             if execution.status == "failed":
                 await _schedule_retry(execution, session, session_factory)
 
-            # Signal completion to SSE subscribers
-            await log_broadcaster.publish(
-                execution_id,
-                {
-                    "type": "complete",
-                    "status": execution.status,
-                },
+            # Signal completion to SSE subscribers（通知失败不应中断收尾）
+            try:
+                await log_broadcaster.publish(
+                    execution_id,
+                    {
+                        "type": "complete",
+                        "status": execution.status,
+                    },
+                )
+            except Exception:
+                pass
+
+
+async def _finalize_via_fresh_session(
+    session_factory: async_sessionmaker[AsyncSession],
+    execution_id: str,
+    *,
+    status: str,
+    finished_at: datetime,
+    error_message: str | None,
+    result_summary: dict | None,
+) -> None:
+    """Best-effort 终态落库：主 session 已污染时用独立 session 写入。"""
+    try:
+        async with session_factory() as s:
+            result = await s.execute(
+                select(TaskExecution).where(TaskExecution.id == execution_id)
             )
+            ex = result.scalar_one_or_none()
+            if ex is None:
+                return
+            ex.status = status
+            ex.finished_at = finished_at
+            ex.error_message = error_message
+            ex.result_summary = result_summary
+            await s.commit()
+    except Exception:
+        pass  # 兜底失败已无更多手段，保证 SSE 通知不被阻断
