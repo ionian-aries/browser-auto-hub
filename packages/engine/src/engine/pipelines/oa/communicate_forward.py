@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from playwright.async_api import Page
 from sqlalchemy import text
@@ -203,7 +203,8 @@ class OaCommunicateForwardPipeline(BasePipeline):
                 " WHERE task_id = :task_id"
                 " AND (fwd IS NULL OR fwd = 0) AND forward_time IS NULL"
             ),
-            {"ts": datetime.now(), "task_id": task_id},
+            # 原始 SQL 不经过 UTCDateTime.bind，需自行写 UTC-naive 值
+            {"ts": datetime.now(timezone.utc).replace(tzinfo=None), "task_id": task_id},
         )
         # WHERE 条件原子防重：并发重复执行时只有一方能写入
         return "updated" if result.rowcount > 0 else "forwarded"
