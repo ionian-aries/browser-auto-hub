@@ -124,7 +124,7 @@ async def _run_execution(
         execution.started_at = datetime.now(timezone.utc)
         await session.commit()
 
-        storage = MinioStorage()
+        storage = await MinioStorage.create(session)
         logger = DbStepLogger(execution_id, session, storage)
         settings = get_settings()
 
