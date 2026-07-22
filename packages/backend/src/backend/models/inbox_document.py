@@ -1,20 +1,15 @@
-import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from backend.models.base import Base
-
-
-def _generate_uuid() -> str:
-    return str(uuid.uuid4())
+from backend.models.base import Base, UTCDateTime, generate_uuid
 
 
 class InboxDocument(Base):
     __tablename__ = "inbox_documents"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_generate_uuid)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     task_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     creator: Mapped[str | None] = mapped_column(String(255), nullable=True)
     send_time: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -25,7 +20,7 @@ class InboxDocument(Base):
     attachment_urls: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     fwd: Mapped[int] = mapped_column(Integer, default=0)
     skip: Mapped[int] = mapped_column(Integer, default=0)
-    forward_time: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    forward_time: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     def __init__(self, **kwargs):
         kwargs.setdefault("attachment_urls", "[]")

@@ -1,20 +1,15 @@
-import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Integer, JSON, String, Text, func
+from sqlalchemy import Enum, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.models.base import Base
-
-
-def _generate_uuid() -> str:
-    return str(uuid.uuid4())
+from backend.models.base import Base, UTCDateTime, generate_uuid
 
 
 class Pipeline(Base):
     __tablename__ = "pipelines"
 
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_generate_uuid)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     name: Mapped[str] = mapped_column(String(100), unique=True, index=True)
     display_name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
@@ -26,10 +21,10 @@ class Pipeline(Base):
         Enum("active", "disabled", name="pipeline_status"), default="active"
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now()
+        UTCDateTime, server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, server_default=func.now(), onupdate=func.now()
     )
 
     schedules = relationship("Schedule", back_populates="pipeline")
