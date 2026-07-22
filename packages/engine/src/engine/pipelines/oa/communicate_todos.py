@@ -5,11 +5,12 @@ import json
 import re
 import time
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Page
 
 from engine.base import BasePipeline, PipelineResult
 from engine.context import ExecutionContext
 from engine.pipelines.oa.shared.login import LoginError, LoginTimeout, oa_login
+from engine.pipelines.oa.shared.browser import oa_browser
 from engine.registry import register_pipeline
 
 _TITLE_LINK_SELECTOR = 'a.lui_notify_alink[href*="sysNotifyTodo"]'
@@ -62,16 +63,11 @@ class OaCommunicateTodosPipeline(BasePipeline):
         config.setdefault("element_visible_timeout", 5000)
         config.setdefault("action_settle_timeout", 500)
         config.setdefault("max_pages", 100)
-        headless = config.get("headless", True)
-        close_browser = config.get("close_browser", True)
 
         records: list[dict] = []
         stats = {"total": 0, "inserted": 0, "skipped": 0, "attachment_failures": 0}
 
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=headless)
-            page = await browser.new_page()
-
+        async with oa_browser(config) as page:
             try:
                 await ctx.logger.step("login", "登录 OA 系统")
                 await oa_login(page, config)
@@ -128,9 +124,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
             except Exception as e:
                 await ctx.logger.error("crawl", f"Unexpected error: {e}")
                 return PipelineResult(success=False, error=str(e))
-            finally:
-                if close_browser:
-                    await browser.close()
 
         return PipelineResult(success=True, summary=stats)
 
