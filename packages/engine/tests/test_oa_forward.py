@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -141,6 +141,18 @@ async def test_update_fwd_atomic_sql_and_rowcount():
     assert "(fwd IS NULL OR fwd = 0)" in update_sql
     assert "forward_time IS NULL" in update_sql
     assert params["task_id"] == "t1"
+
+
+@pytest.mark.asyncio
+async def test_update_fwd_timestamp_is_utc():
+    """forward_time 必须写 UTC 值，与 backend UTCDateTime（读回按 UTC 解释）对齐。"""
+    cf = _load()
+    db = FakeDb([FakeResult(row=(0, None)), FakeResult(rowcount=1)])
+    ctx = FakeCtx(db)
+    await cf.OaCommunicateForwardPipeline._update_fwd(ctx, "t1")
+    ts = db.executed[1][1]["ts"]
+    utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert abs((utc_now - ts).total_seconds()) < 60
 
 
 @pytest.mark.asyncio
