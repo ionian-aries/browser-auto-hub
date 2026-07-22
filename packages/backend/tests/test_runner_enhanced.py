@@ -53,15 +53,21 @@ async def test_check_concurrency_null_count_treated_as_zero():
 
 @pytest.mark.asyncio
 async def test_schedule_retry_noop_when_no_schedule_id():
-    """Manual/api triggers (schedule_id is None) should not schedule a retry."""
+    """Manual/api triggers retry via global run_default_* settings; default 0 → no retry."""
     execution = MagicMock()
     execution.schedule_id = None
+    execution.retry_count = 0
+
+    result_mock = MagicMock()
+    result_mock.scalars.return_value = []  # 无 run_default_* 行 → max_retries=0
     session = AsyncMock()
+    session.execute.return_value = result_mock
     session_factory = MagicMock()
 
-    # Should return immediately without touching session or spawning tasks
+    before = len(asyncio.all_tasks())
     await _schedule_retry(execution, session, session_factory)
-    session.execute.assert_not_called()
+    assert len(asyncio.all_tasks()) == before
+    session_factory.assert_not_called()
 
 
 @pytest.mark.asyncio
