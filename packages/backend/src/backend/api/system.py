@@ -52,7 +52,7 @@ async def get_system_settings(session: AsyncSession = Depends(get_session)):
     return {
         "minio_endpoint": merged.minio_endpoint,
         "minio_access_key": merged.minio_access_key,
-        "minio_secret_key": merged.minio_secret_key,
+        "minio_secret_key": MASKED if merged.minio_secret_key else "",
         "minio_bucket": merged.minio_bucket,
         "minio_object_prefix": merged.minio_object_prefix,
         "minio_presign_expires_seconds": merged.minio_presign_expires_seconds,
