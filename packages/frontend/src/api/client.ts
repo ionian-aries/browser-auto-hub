@@ -51,12 +51,12 @@ export const executionApi = {
 };
 
 export const systemApi = {
-  health: () => api.get<{ status: string; version: string }>("/system/health").then((r) => r.data),
   info: () => api.get<SystemInfo>("/system/info").then((r) => r.data),
   getSettings: () => api.get<SystemSettings>("/system/settings").then((r) => r.data),
   updateSettings: (data: Partial<SystemSettings>) =>
     api.put("/system/settings", data).then((r) => r.data),
   testStorage: () => api.post<{ status: string; message: string }>("/system/storage/test").then((r) => r.data),
+  testDb: () => api.post<{ status: string }>("/system/db/test").then((r) => r.data),
 };
 
 export const fileApi = {

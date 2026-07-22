@@ -62,19 +62,20 @@ export interface ExecutionStats {
 }
 
 export interface SystemInfo {
-  uptime_seconds: number;
   scheduler_status: "running" | "paused";
   active_schedules: number;
-  db_pool: { pool_size: number; checked_out: number; overflow: number };
 }
 
 export interface SystemSettings {
   minio_endpoint: string;
+  minio_access_key: string;
+  minio_secret_key: string;
   minio_bucket: string;
   minio_object_prefix: string;
-  minio_presign_expires_seconds: string;
-  log_retention_days: string;
-  scheduler_enabled: string;
+  minio_presign_expires_seconds: number;
+  log_retention_days: number;
+  scheduler_enabled: boolean;
+  database_url: string;
 }
 
 export interface Artifact {
