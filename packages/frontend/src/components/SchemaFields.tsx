@@ -17,10 +17,16 @@ interface Props {
   defaults?: Record<string, unknown>;
   /** 双栏网格排布（spec 4 §8.1） */
   twoColumn?: boolean;
+  /**
+   * 是否用 defaults/schema default seed 字段初始值。
+   * 编辑场景传 false：Form 层 initialValues 已带保存的配置，
+   * Form.Item 级 initialValue 会覆盖并丢弃它们。
+   */
+  seedDefaults?: boolean;
 }
 
 /** 按 pipeline config_schema 动态渲染运行参数字段（执行配置页共用） */
-export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn }: Props) {
+export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, seedDefaults = true }: Props) {
   const properties = schema?.properties || {};
   const required = schema?.required || [];
   const entries = Object.entries(properties);
@@ -37,7 +43,7 @@ export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn }: P
         key={key}
         name={[...namePrefix, key]}
         label={label}
-        initialValue={initialValue}
+        {...(seedDefaults ? { initialValue } : {})}
         rules={isRequired ? [{ required: true, message: `请输入${label}` }] : []}
       >
         {prop.type === "integer" ? (
