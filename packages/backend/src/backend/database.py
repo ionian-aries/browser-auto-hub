@@ -29,18 +29,6 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-def mask_db_url(url: str) -> str:
-    """Return the DB URL with the password component replaced by ***."""
-    try:
-        from sqlalchemy.engine.url import make_url
-
-        return make_url(url).render_as_string(hide_password=True)
-    except Exception:
-        import re
-
-        return re.sub(r"(://[^:/@]+):[^@]*@", r"\1:***@", url)
-
-
 async def swap_engine(new_url: str) -> None:
     """Validate new DB URL, swap engine + session factory, update scheduler, create_all."""
     global _engine, _session_factory

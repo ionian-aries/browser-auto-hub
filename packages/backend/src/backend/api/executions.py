@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from sse_starlette.sse import EventSourceResponse
 
 from backend.database import get_session
@@ -26,6 +27,8 @@ async def create_execution(
     pipeline = result.scalar_one_or_none()
     if pipeline is None:
         raise HTTPException(404, f"Pipeline '{body.pipeline}' not found")
+    if pipeline.status != "active":
+        raise HTTPException(400, "流水线已停用，无法触发执行")
 
     execution = TaskExecution(
         pipeline_id=pipeline.id,
@@ -44,6 +47,7 @@ async def create_execution(
 
     resp = ExecutionResponse.model_validate(execution)
     resp.pipeline_name = pipeline.name
+    resp.pipeline_display_name = pipeline.display_name
     return resp
 
 
@@ -51,19 +55,36 @@ async def create_execution(
 async def list_executions(
     pipeline: str | None = None,
     status: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     session: AsyncSession = Depends(get_session),
 ):
-    stmt = select(TaskExecution).order_by(TaskExecution.id.desc())
+    stmt = (
+        select(TaskExecution)
+        .options(selectinload(TaskExecution.pipeline))
+        .order_by(TaskExecution.id.desc())
+    )
     if pipeline:
         stmt = stmt.join(Pipeline).where(Pipeline.name == pipeline)
     if status:
-        stmt = stmt.where(TaskExecution.status == status)
+        stmt = stmt.where(TaskExecution.status.in_(status.split(",")))
+    if start:
+        stmt = stmt.where(TaskExecution.created_at >= start.replace(tzinfo=None))
+    if end:
+        stmt = stmt.where(TaskExecution.created_at <= end.replace(tzinfo=None))
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     result = await session.execute(stmt)
-    return result.scalars().all()
+    out = []
+    for e in result.scalars().all():
+        resp = ExecutionResponse.model_validate(e)
+        if e.pipeline:
+            resp.pipeline_name = e.pipeline.name
+            resp.pipeline_display_name = e.pipeline.display_name
+        out.append(resp)
+    return out
 
 
 @router.get("/stats")
@@ -112,12 +133,18 @@ async def get_execution(
     execution_id: str, session: AsyncSession = Depends(get_session)
 ):
     result = await session.execute(
-        select(TaskExecution).where(TaskExecution.id == execution_id)
+        select(TaskExecution)
+        .options(selectinload(TaskExecution.pipeline))
+        .where(TaskExecution.id == execution_id)
     )
     execution = result.scalar_one_or_none()
     if execution is None:
         raise HTTPException(404, "Execution not found")
-    return execution
+    resp = ExecutionResponse.model_validate(execution)
+    if execution.pipeline:
+        resp.pipeline_name = execution.pipeline.name
+        resp.pipeline_display_name = execution.pipeline.display_name
+    return resp
 
 
 @router.get("/{execution_id}/logs")
@@ -178,6 +205,35 @@ async def cancel_execution(
     await session.commit()
     await session.refresh(execution)
     return execution
+
+
+@router.delete("/{execution_id}", status_code=204)
+async def delete_execution(
+    execution_id: str, session: AsyncSession = Depends(get_session)
+):
+    from sqlalchemy import delete as sql_delete
+
+    from backend.models.execution import TaskArtifact
+
+    result = await session.execute(
+        select(TaskExecution).where(TaskExecution.id == execution_id)
+    )
+    execution = result.scalar_one_or_none()
+    if execution is None:
+        raise HTTPException(404, "Execution not found")
+    if execution.status in ("pending", "running"):
+        raise HTTPException(400, "执行进行中，请先取消再删除")
+
+    # 仅删除执行记录 + 日志 + 产物元数据行（FK 约束要求）；
+    # MinIO 中的截图/产物文件与 pipeline 写入的业务数据一律保留（spec 4 §7.2）。
+    await session.execute(
+        sql_delete(TaskLog).where(TaskLog.execution_id == execution_id)
+    )
+    await session.execute(
+        sql_delete(TaskArtifact).where(TaskArtifact.execution_id == execution_id)
+    )
+    await session.delete(execution)
+    await session.commit()
 
 
 @router.get("/{execution_id}/artifacts")

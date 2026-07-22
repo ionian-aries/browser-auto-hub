@@ -9,6 +9,7 @@ class ScheduleCreate(BaseModel):
     trigger_type: str  # "cron" | "interval" | "once"
     cron_expr: str | None = None
     interval_seconds: int | None = None
+    run_at: datetime | None = None
     config_override: dict | None = None
     enabled: bool = True
     max_retries: int = 0
@@ -20,6 +21,7 @@ class ScheduleUpdate(BaseModel):
     trigger_type: str | None = None
     cron_expr: str | None = None
     interval_seconds: int | None = None
+    run_at: datetime | None = None
     config_override: dict | None = None
     enabled: bool | None = None
     max_retries: int | None = None
@@ -29,11 +31,13 @@ class ScheduleUpdate(BaseModel):
 class ScheduleResponse(BaseModel):
     id: str
     pipeline_id: str
-    pipeline_name: str | None = None
+    pipeline_name: str | None = None  # 标识符，用于路由
+    pipeline_display_name: str | None = None  # 中文显示名，用于展示
     name: str
     trigger_type: str
     cron_expr: str | None = None
     interval_seconds: int | None = None
+    run_at: datetime | None = None
     config_override: dict | None = None
     enabled: bool
     next_run_at: datetime | None = None

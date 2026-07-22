@@ -46,6 +46,9 @@ class MinioStorage:
         response = self._client.get_object(Bucket=self._bucket, Key=key)
         return response["Body"].read()
 
+    def delete(self, key: str) -> None:
+        self._client.delete_object(Bucket=self._bucket, Key=key)
+
     def presign_url(self, key: str, expires_in: int | None = None) -> str:
         """Generate a presigned GET URL for the given object key."""
         return self._client.generate_presigned_url(

@@ -1,4 +1,4 @@
-"""OA 沟通待办采集 Pipeline — crawl notifications, extract metadata, upload attachments."""
+"""OA 沟通待办采集 Pipeline"""
 
 import base64
 import json
@@ -12,7 +12,6 @@ from engine.context import ExecutionContext
 from engine.pipelines.oa.shared.login import LoginError, LoginTimeout, oa_login
 from engine.registry import register_pipeline
 
-# CSS selectors
 _TITLE_LINK_SELECTOR = 'a.lui_notify_alink[href*="sysNotifyTodo"]'
 _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
 
@@ -58,44 +57,41 @@ _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
 )
 class OaCommunicateTodosPipeline(BasePipeline):
     async def execute(self, config: dict, ctx: ExecutionContext) -> PipelineResult:
-        # Apply defaults from config_schema
         config.setdefault("login_url", "https://ioa.sd-port.net/login.jsp")
         config.setdefault("page_load_timeout", 15000)
         config.setdefault("element_visible_timeout", 5000)
         config.setdefault("action_settle_timeout", 500)
         config.setdefault("max_pages", 100)
+        headless = config.get("headless", True)
+        close_browser = config.get("close_browser", True)
 
         records: list[dict] = []
         stats = {"total": 0, "inserted": 0, "skipped": 0, "attachment_failures": 0}
 
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
+            browser = await pw.chromium.launch(headless=headless)
             page = await browser.new_page()
 
             try:
-                # Step 1: Login
                 await ctx.logger.step("login", "登录 OA 系统")
                 await oa_login(page, config)
 
-                # Step 2: Locate list iframe
                 await ctx.logger.step("locate_list", "定位待办列表")
                 frame = await self._find_list_frame(page, config)
                 if frame is None:
                     await ctx.logger.step("locate_list", "未找到待办列表 iframe", level="error")
                     return PipelineResult(success=False, error="List iframe not found")
 
-                # Step 3: Check empty state
                 content = await frame.content()
                 if _EMPTY_TEXT in content:
                     await ctx.logger.step("crawl", "待办列表为空，无需采集")
                     return PipelineResult(success=True, summary=stats)
 
-                # Step 4: Load existing task_ids for dedup
+                # 加载已有 task_id 用于去重
                 from sqlalchemy import text
                 result = await ctx.db.execute(text("SELECT task_id FROM inbox_documents"))
                 existing_ids = {row[0] for row in result.fetchall()}
 
-                # Step 5: Crawl all pages
                 max_pages = config["max_pages"]
                 page_num = 0
                 while True:
@@ -115,12 +111,10 @@ class OaCommunicateTodosPipeline(BasePipeline):
                         if record:
                             records.append(record)
 
-                    # Check next page
                     if not await self._has_next_page(frame):
                         break
                     await self._click_next_page(frame, config)
 
-                # Step 6: Save to database
                 if records:
                     await ctx.logger.step("save", f"写入数据库 {len(records)} 条")
                     await self._save_records(records, ctx)
@@ -135,12 +129,13 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 await ctx.logger.error("crawl", f"Unexpected error: {e}")
                 return PipelineResult(success=False, error=str(e))
             finally:
-                await browser.close()
+                if close_browser:
+                    await browser.close()
 
         return PipelineResult(success=True, summary=stats)
 
     async def _find_list_frame(self, page: Page, config: dict):
-        """Find the iframe containing portal_qdport.jsp."""
+        """定位 portal_qdport.jsp iframe"""
         timeout = config["page_load_timeout"]
         deadline = time.time() + timeout / 1000
         while time.time() < deadline:
@@ -158,8 +153,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
         return None
 
     async def _process_one(self, frame, links, index, config, ctx, existing_ids, stats):
-        """Open detail tab, extract metadata, close tab. Returns record dict or None."""
-        # Click link to open new tab
+        """打开详情页提取元数据，返回 record dict 或 None"""
         page = frame.page
         async with page.context.expect_page() as new_page_info:
             await links.nth(index).click()
@@ -167,7 +161,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
         await detail_page.wait_for_load_state("domcontentloaded")
 
         try:
-            # Extract task_id from URL
             url = detail_page.url
             match = re.search(r"fdId=([a-f0-9]+)", url)
             task_id = match.group(1) if match else ""
@@ -176,12 +169,10 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 stats["skipped"] += 1
                 return None
 
-            # Dedup check
             if task_id in existing_ids:
                 stats["skipped"] += 1
                 return None
 
-            # Extract metadata
             record = await self._extract_meta(detail_page, task_id, config, ctx, stats)
             existing_ids.add(task_id)
             return record
@@ -189,12 +180,10 @@ class OaCommunicateTodosPipeline(BasePipeline):
             await detail_page.close()
 
     async def _extract_meta(self, page: Page, task_id: str, config, ctx, stats) -> dict:
-        """Extract all metadata from detail page."""
-        # Title
+        """提取详情页全部元数据"""
         title = await page.title()
         title = re.sub(r"\s*-\s*工作沟通$", "", title)
 
-        # Creator
         creator = ""
         try:
             creator_el = page.locator("a.com_author")
@@ -203,7 +192,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
         except Exception:
             pass
 
-        # Base info section
         base_info = ""
         try:
             base_el = page.locator(".baseInfo")
@@ -212,17 +200,14 @@ class OaCommunicateTodosPipeline(BasePipeline):
         except Exception:
             pass
 
-        # Send time
         send_time = ""
         time_match = re.search(r"发表于\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})", base_info)
         if time_match:
             send_time = time_match.group(1)
 
-        # Participants and CC
         participants = self._extract_names(base_info, "接收者")
         cc_recipients = self._extract_names(base_info, "抄送人")
 
-        # Summary (body content)
         summary = ""
         try:
             body_el = page.locator(".cheditor_view")
@@ -231,7 +216,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
         except Exception:
             pass
 
-        # Attachments
         attachment_urls = await self._download_attachments(page, task_id, config, ctx, stats)
 
         return {
@@ -246,19 +230,17 @@ class OaCommunicateTodosPipeline(BasePipeline):
         }
 
     def _extract_names(self, text: str, label: str) -> str:
-        """Extract comma-separated names after a label."""
+        """提取标签后的逗号分隔姓名列表"""
         pattern = rf"{label}[:：]\s*(.+?)(?:\n|$)"
         match = re.search(pattern, text)
         if not match:
             return ""
         raw = match.group(1).strip()
-        # Split by Chinese/English comma and dunhao
         names = re.split(r"[,，、]", raw)
         return ",".join(n.strip() for n in names if n.strip())
 
     async def _download_attachments(self, page, task_id, config, ctx, stats) -> list[dict]:
-        """Download attachments via page-internal fetch, upload to MinIO."""
-        # Check if attachments exist
+        """通过页面内 fetch 下载附件并上传 MinIO"""
         content = await page.content()
         attach_match = re.search(r"文档附件\((\d+)\)", content)
         if not attach_match or int(attach_match.group(1)) == 0:
@@ -267,7 +249,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
         attachments = []
         timeout = config["page_load_timeout"]
 
-        # Wait for attachment rows
         try:
             await page.wait_for_selector(
                 ".work_comm_Content .upload_list_tr_view",
@@ -290,7 +271,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
             if not fd_id or not filename:
                 continue
 
-            # Download via page-internal fetch (shares session cookies)
             try:
                 b64_data = await page.evaluate(
                     """async (fdId) => {
@@ -308,9 +288,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 )
 
                 file_bytes = base64.b64decode(b64_data)
-                # Upload to MinIO
-                settings = ctx.settings
-                object_key = f"{settings.minio_object_prefix}/attachments/{task_id}/{filename}"
+                object_key = f"{ctx.settings.minio_object_prefix}/attachments/{task_id}/{filename}"
                 ctx.minio.upload(object_key, file_bytes)
                 presign = ctx.minio.presign_url(object_key)
                 attachments.append({"filename": filename, "object_key": object_key, "url": presign, "ok": True})
@@ -321,7 +299,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
         return attachments
 
     async def _has_next_page(self, frame) -> bool:
-        """Check if there's a next page."""
+        """判断是否有下一页（当前页/总页数）"""
         result = await frame.evaluate("""() => {
             const texts = document.body.innerText;
             const match = texts.match(/(\\d+)\\/(\\d+)/);
@@ -331,7 +309,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
         return bool(result)
 
     async def _click_next_page(self, frame, config):
-        """Click next page button."""
         await frame.evaluate("""() => {
             const pager = document.querySelector('.lui_paging_mini, .lui_paging');
             if (!pager) return;
@@ -347,7 +324,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
         await frame.page.wait_for_timeout(config["action_settle_timeout"])
 
     async def _save_records(self, records: list[dict], ctx: ExecutionContext):
-        """Insert records into inbox_documents table via raw SQL (engine cannot import backend)."""
+        """批量写入 inbox_documents（raw SQL，engine 不可导入 backend models）"""
         import uuid
 
         from sqlalchemy import text

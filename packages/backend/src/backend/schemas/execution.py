@@ -12,7 +12,8 @@ class ExecutionCreate(BaseModel):
 class ExecutionResponse(BaseModel):
     id: str
     pipeline_id: str
-    pipeline_name: str | None = None
+    pipeline_name: str | None = None  # 标识符，用于路由
+    pipeline_display_name: str | None = None  # 中文显示名，用于展示
     schedule_id: str | None = None
     trigger_type: str
     status: str
