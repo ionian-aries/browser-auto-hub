@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from apscheduler import AsyncScheduler
+from apscheduler import AsyncScheduler, ConflictPolicy
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete, select
@@ -20,11 +20,11 @@ class SchedulerManager:
     async def start(self) -> None:
         await self._scheduler.__aenter__()
         # System cleanup job always runs regardless of pause state.
-        await self._scheduler.add_job(
+        await self._scheduler.add_schedule(
             self._cleanup_old_executions,
-            trigger=CronTrigger(hour=3, minute=0),
+            CronTrigger(hour=3, minute=0),
             id="system_cleanup",
-            replace_existing=True,
+            conflict_policy=ConflictPolicy.replace,
         )
         async with self._session_factory() as session:
             enabled = await self._get_setting(session, "scheduler_enabled", "true")
@@ -116,7 +116,7 @@ class SchedulerManager:
     async def remove_schedule(self, schedule_id: str) -> None:
         job_id = f"schedule_{schedule_id}"
         try:
-            await self._scheduler.remove_job(job_id)
+            await self._scheduler.remove_schedule(job_id)
         except Exception:
             pass  # Job may not exist
 
@@ -133,12 +133,12 @@ class SchedulerManager:
         if trigger is None:
             return
 
-        await self._scheduler.add_job(
+        await self._scheduler.add_schedule(
             self._execute_scheduled,
-            trigger=trigger,
+            trigger,
             id=job_id,
             kwargs={"schedule_id": schedule.id, "pipeline_id": schedule.pipeline_id},
-            replace_existing=True,
+            conflict_policy=ConflictPolicy.replace,
         )
 
     def _build_trigger(self, schedule: Schedule):
