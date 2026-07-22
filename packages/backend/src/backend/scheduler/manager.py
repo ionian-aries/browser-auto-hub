@@ -1,20 +1,36 @@
+from datetime import datetime, timedelta, timezone
+
 from apscheduler import AsyncScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.models.execution import TaskExecution
+from backend.models.execution import TaskArtifact, TaskExecution, TaskLog
 from backend.models.schedule import Schedule
+from backend.models.system_setting import SystemSetting
 
 
 class SchedulerManager:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
         self._scheduler = AsyncScheduler()
+        self._paused = False
 
     async def start(self) -> None:
         await self._scheduler.__aenter__()
+        # System cleanup job always runs regardless of pause state.
+        await self._scheduler.add_job(
+            self._cleanup_old_executions,
+            trigger=CronTrigger(hour=3, minute=0),
+            id="system_cleanup",
+            replace_existing=True,
+        )
+        async with self._session_factory() as session:
+            enabled = await self._get_setting(session, "scheduler_enabled", "true")
+        if enabled == "false":
+            self._paused = True
+            return
         await self.sync_all()
 
     async def stop(self) -> None:
@@ -29,6 +45,63 @@ class SchedulerManager:
             schedules = result.scalars().all()
             for schedule in schedules:
                 await self._register_job(schedule)
+
+    async def pause(self) -> None:
+        """Remove all schedule jobs (DB enabled flags unchanged)."""
+        self._paused = True
+        async with self._session_factory() as session:
+            result = await session.execute(select(Schedule.id))
+            for (sid,) in result.all():
+                await self.remove_schedule(sid)
+
+    async def resume(self) -> None:
+        self._paused = False
+        await self.sync_all()
+
+    @staticmethod
+    async def _get_setting(
+        session: AsyncSession, key: str, default: str
+    ) -> str:
+        """Read a system setting; return default if missing."""
+        result = await session.execute(
+            select(SystemSetting.value).where(SystemSetting.key == key)
+        )
+        value = result.scalar_one_or_none()
+        return default if value is None else value
+
+    @staticmethod
+    def _compute_cutoff(days: int) -> datetime:
+        """Naive-UTC cutoff datetime; executions older than this get deleted."""
+        return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+
+    async def _cleanup_old_executions(self) -> None:
+        """Delete executions (and their logs/artifacts) older than log_retention_days."""
+        async with self._session_factory() as session:
+            days = await self._get_setting(session, "log_retention_days", "30")
+            cutoff = self._compute_cutoff(int(days))
+            # Delete child rows first, then executions.
+            await session.execute(
+                delete(TaskLog).where(
+                    TaskLog.execution_id.in_(
+                        select(TaskExecution.id).where(
+                            TaskExecution.created_at < cutoff
+                        )
+                    )
+                )
+            )
+            await session.execute(
+                delete(TaskArtifact).where(
+                    TaskArtifact.execution_id.in_(
+                        select(TaskExecution.id).where(
+                            TaskExecution.created_at < cutoff
+                        )
+                    )
+                )
+            )
+            await session.execute(
+                delete(TaskExecution).where(TaskExecution.created_at < cutoff)
+            )
+            await session.commit()
 
     async def add_schedule(self, schedule: Schedule) -> None:
         if schedule.enabled:
