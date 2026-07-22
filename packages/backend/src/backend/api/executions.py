@@ -16,6 +16,8 @@ from backend.services.broadcaster import log_broadcaster
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
 
+_SSE_KEEPALIVE_SECONDS = 15
+
 
 @router.post("", response_model=ExecutionResponse, status_code=201)
 async def create_execution(
@@ -170,18 +172,44 @@ async def get_execution_logs(
 
 
 @router.get("/{execution_id}/logs/stream")
-async def stream_execution_logs(execution_id: str):
+async def stream_execution_logs(
+    execution_id: str, session: AsyncSession = Depends(get_session)
+):
     queue = log_broadcaster.subscribe(execution_id)
+
+    # 断线/迟到补发：先回放已落库日志，再进入实时流
+    result = await session.execute(
+        select(TaskLog)
+        .where(TaskLog.execution_id == execution_id)
+        .order_by(TaskLog.timestamp)
+    )
+    backlog = [
+        {
+            "timestamp": log.timestamp.isoformat(),
+            "level": log.level,
+            "step": log.step_name,
+            "message": log.message,
+            "screenshot_key": log.screenshot_key,
+        }
+        for log in result.scalars().all()
+    ]
 
     async def event_generator():
         try:
+            for entry in backlog:
+                yield {"data": json.dumps(entry)}
             while True:
-                entry = await asyncio.wait_for(queue.get(), timeout=60.0)
+                try:
+                    entry = await asyncio.wait_for(
+                        queue.get(), timeout=_SSE_KEEPALIVE_SECONDS
+                    )
+                except asyncio.TimeoutError:
+                    # SSE 注释行心跳：保持连接且前端不会渲染成伪日志
+                    yield {"comment": "keepalive"}
+                    continue
                 yield {"data": json.dumps(entry)}
                 if entry.get("type") == "complete":
                     break
-        except asyncio.TimeoutError:
-            yield {"data": json.dumps({"type": "keepalive"})}
         finally:
             log_broadcaster.unsubscribe(execution_id, queue)
 
@@ -204,6 +232,10 @@ async def cancel_execution(
     execution.finished_at = datetime.now(timezone.utc)
     await session.commit()
     await session.refresh(execution)
+
+    # 真正停止后台 asyncio task；未在运行则忽略
+    from backend.services.runner import cancel_running_execution
+    cancel_running_execution(execution_id)
     return execution
 
 
