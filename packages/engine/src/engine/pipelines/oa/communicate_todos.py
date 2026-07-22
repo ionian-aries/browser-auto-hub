@@ -5,11 +5,12 @@ import json
 import re
 import time
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Page
 
 from engine.base import BasePipeline, PipelineResult
 from engine.context import ExecutionContext
 from engine.pipelines.oa.shared.login import LoginError, LoginTimeout, oa_login
+from engine.pipelines.oa.shared.browser import oa_browser
 from engine.registry import register_pipeline
 
 # CSS selectors
@@ -68,10 +69,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
         records: list[dict] = []
         stats = {"total": 0, "inserted": 0, "skipped": 0, "attachment_failures": 0}
 
-        async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
-            page = await browser.new_page()
-
+        async with oa_browser(config) as page:
             try:
                 # Step 1: Login
                 await ctx.logger.step("login", "登录 OA 系统")
@@ -134,8 +132,6 @@ class OaCommunicateTodosPipeline(BasePipeline):
             except Exception as e:
                 await ctx.logger.error("crawl", f"Unexpected error: {e}")
                 return PipelineResult(success=False, error=str(e))
-            finally:
-                await browser.close()
 
         return PipelineResult(success=True, summary=stats)
 
