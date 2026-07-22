@@ -10,9 +10,12 @@ router = APIRouter(prefix="/api/files", tags=["files"])
 
 
 @router.get("/presign")
-async def presign_url(key: str = Query(..., description="MinIO object key")):
+async def presign_url(
+    key: str = Query(..., description="MinIO object key"),
+    session: AsyncSession = Depends(get_session),
+):
     try:
-        storage = MinioStorage()
+        storage = await MinioStorage.create(session)
         url = storage.presign_url(key)
         return {"url": url}
     except Exception as e:
@@ -30,7 +33,7 @@ async def download_artifact(
     if artifact is None:
         raise HTTPException(404, "Artifact not found")
 
-    storage = MinioStorage()
+    storage = await MinioStorage.create(session)
     url = storage.presign_url(artifact.minio_key)
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url)

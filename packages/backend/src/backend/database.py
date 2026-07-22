@@ -27,3 +27,43 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     factory = _get_session_factory()
     async with factory() as session:
         yield session
+
+
+def mask_db_url(url: str) -> str:
+    """Return the DB URL with the password component replaced by ***."""
+    try:
+        from sqlalchemy.engine.url import make_url
+
+        return make_url(url).render_as_string(hide_password=True)
+    except Exception:
+        import re
+
+        return re.sub(r"(://[^:/@]+):[^@]*@", r"\1:***@", url)
+
+
+async def swap_engine(new_url: str) -> None:
+    """Validate new DB URL, swap engine + session factory, update scheduler, create_all."""
+    global _engine, _session_factory
+    from sqlalchemy import text
+    from backend.models.base import Base
+
+    new_engine = create_async_engine(new_url, echo=False, pool_size=5)
+    try:
+        async with new_engine.connect() as conn:  # validate before committing to swap
+            await conn.execute(text("SELECT 1"))
+        async with new_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception:
+        await new_engine.dispose()
+        raise
+
+    old_engine = _engine
+    _engine = new_engine
+    _session_factory = async_sessionmaker(new_engine, expire_on_commit=False)
+
+    from backend.scheduler.manager import scheduler_manager
+    if scheduler_manager is not None:
+        scheduler_manager._session_factory = _session_factory
+
+    if old_engine is not None:
+        await old_engine.dispose()

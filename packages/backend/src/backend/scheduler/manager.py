@@ -78,7 +78,11 @@ class SchedulerManager:
         """Delete executions (and their logs/artifacts) older than log_retention_days."""
         async with self._session_factory() as session:
             days = await self._get_setting(session, "log_retention_days", "30")
-            cutoff = self._compute_cutoff(int(days))
+            try:
+                retention_days = int(days)
+            except (TypeError, ValueError):
+                retention_days = 30
+            cutoff = self._compute_cutoff(retention_days)
             # Delete child rows first, then executions.
             await session.execute(
                 delete(TaskLog).where(
@@ -104,6 +108,8 @@ class SchedulerManager:
             await session.commit()
 
     async def add_schedule(self, schedule: Schedule) -> None:
+        if self._paused:
+            return
         if schedule.enabled:
             await self._register_job(schedule)
 
@@ -115,6 +121,8 @@ class SchedulerManager:
             pass  # Job may not exist
 
     async def update_schedule(self, schedule: Schedule) -> None:
+        if self._paused:
+            return
         await self.remove_schedule(schedule.id)
         if schedule.enabled:
             await self._register_job(schedule)

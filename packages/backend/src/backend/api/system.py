@@ -1,32 +1,16 @@
-import time
-
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
-from backend.database import _get_engine, get_session
+from backend.config import get_merged_settings, get_settings, write_env_value
+from backend.database import _get_engine, get_session, mask_db_url, swap_engine
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
-_start_time = time.time()
-
-
-def _get_db_pool_info() -> dict:
-    """Get actual DB pool stats from the engine."""
-    try:
-        engine = _get_engine()
-        pool = engine.pool
-        return {
-            "pool_size": pool.size(),
-            "checked_out": pool.checkedout(),
-            "overflow": pool.overflow(),
-        }
-    except Exception:
-        return {"pool_size": 5, "checked_out": 0, "overflow": 0}
+MASKED = "***"
 
 
 @router.get("/health")
@@ -47,39 +31,47 @@ async def system_info(session: AsyncSession = Depends(get_session)):
         scheduler_status = "paused" if getattr(scheduler_manager, "_paused", False) else "running"
 
     return {
-        "uptime_seconds": int(time.time() - _start_time),
         "scheduler_status": scheduler_status,
         "active_schedules": active_schedules,
-        "db_pool": _get_db_pool_info(),
     }
+
+
+def _safe_int(value: str, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 @router.get("/settings")
 async def get_system_settings(session: AsyncSession = Depends(get_session)):
+    merged = await get_merged_settings(session)
     result = await session.execute(select(SystemSetting))
-    rows = result.scalars().all()
-    settings = get_settings()
+    rows = {row.key: row.value for row in result.scalars()}
 
-    # Merge: DB values override .env defaults; include read-only fields for frontend display
-    defaults = {
-        "minio_endpoint": settings.minio_endpoint,
-        "minio_bucket": settings.minio_bucket,
-        "minio_object_prefix": settings.minio_object_prefix,
-        "minio_presign_expires_seconds": str(settings.minio_presign_expires_seconds),
-        "log_retention_days": "30",
-        "scheduler_enabled": "true",
+    return {
+        "minio_endpoint": merged.minio_endpoint,
+        "minio_access_key": merged.minio_access_key,
+        "minio_secret_key": MASKED,  # never return the real secret
+        "minio_bucket": merged.minio_bucket,
+        "minio_object_prefix": merged.minio_object_prefix,
+        "minio_presign_expires_seconds": merged.minio_presign_expires_seconds,
+        "log_retention_days": _safe_int(rows.get("log_retention_days", "30"), 30),
+        "scheduler_enabled": rows.get("scheduler_enabled", "true") != "false",
+        "database_url": mask_db_url(get_settings().database_url),
     }
-    for row in rows:
-        defaults[row.key] = row.value
-
-    return defaults
 
 
 class SettingsUpdate(BaseModel):
+    minio_endpoint: str | None = None
+    minio_access_key: str | None = None
+    minio_secret_key: str | None = None
+    minio_bucket: str | None = None
     minio_object_prefix: str | None = None
     minio_presign_expires_seconds: int | None = None
     log_retention_days: int | None = None
     scheduler_enabled: bool | None = None
+    database_url: str | None = None
 
 
 @router.put("/settings")
@@ -87,6 +79,16 @@ async def update_system_settings(
     body: SettingsUpdate, session: AsyncSession = Depends(get_session)
 ):
     updates = body.model_dump(exclude_unset=True)
+
+    new_db_url = updates.pop("database_url", None)
+    scheduler_enabled = updates.get("scheduler_enabled")
+
+    # "***" or empty secret means unchanged
+    secret = updates.get("minio_secret_key")
+    if secret is not None and (secret == MASKED or secret == ""):
+        updates.pop("minio_secret_key")
+
+    # Persist system_settings rows
     for key, value in updates.items():
         str_value = str(value).lower() if isinstance(value, bool) else str(value)
         result = await session.execute(
@@ -98,15 +100,51 @@ async def update_system_settings(
         else:
             session.add(SystemSetting(key=key, value=str_value))
     await session.commit()
+
+    # Scheduler toggle (after persist; guard stopped/absent scheduler)
+    if scheduler_enabled is not None:
+        from backend.scheduler.manager import scheduler_manager
+
+        if scheduler_manager is not None:
+            try:
+                if scheduler_enabled:
+                    await scheduler_manager.resume()
+                else:
+                    await scheduler_manager.pause()
+            except Exception:
+                pass
+
+    # Database URL hot-swap last: the request-scoped session above belongs to
+    # the old engine and must not be used afterwards.
+    if new_db_url is not None:
+        if MASKED not in new_db_url and new_db_url != get_settings().database_url:
+            try:
+                await swap_engine(new_db_url)
+            except Exception as e:
+                raise HTTPException(400, f"Invalid database_url: {e}")
+            write_env_value("DATABASE_URL", new_db_url)
+
     return {"status": "ok"}
 
 
 @router.post("/storage/test")
-async def test_storage():
+async def test_storage(session: AsyncSession = Depends(get_session)):
     try:
         from backend.storage.minio_client import MinioStorage
-        storage = MinioStorage()
+
+        storage = await MinioStorage.create(session)
         storage.ensure_bucket()
         return {"status": "ok", "message": "MinIO connection successful"}
     except Exception as e:
         raise HTTPException(500, f"MinIO connection failed: {e}")
+
+
+@router.post("/db/test")
+async def test_db():
+    try:
+        engine = _get_engine()
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except Exception as e:
+        raise HTTPException(500, f"Database connection failed: {e}")

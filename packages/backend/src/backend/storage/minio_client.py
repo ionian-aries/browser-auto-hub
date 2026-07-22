@@ -6,8 +6,9 @@ from backend.config import get_settings
 
 
 class MinioStorage:
-    def __init__(self):
-        settings = get_settings()
+    def __init__(self, settings=None):
+        if settings is None:
+            settings = get_settings()
         self._client = boto3.client(
             "s3",
             endpoint_url=settings.minio_endpoint,
@@ -18,6 +19,13 @@ class MinioStorage:
         )
         self._bucket = settings.minio_bucket
         self._presign_expires = settings.minio_presign_expires_seconds
+
+    @classmethod
+    async def create(cls, session) -> "MinioStorage":
+        """Construct a MinioStorage using merged (.env + DB) settings."""
+        from backend.config import get_merged_settings
+
+        return cls(settings=await get_merged_settings(session))
 
     def ensure_bucket(self) -> None:
         try:
