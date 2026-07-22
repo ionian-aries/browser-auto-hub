@@ -1,25 +1,21 @@
 import { useState } from "react";
-import { Button, Card, Descriptions, InputNumber, Space, Switch, Table, Tabs, Tag, message } from "antd";
+import { Button, Card, Descriptions, InputNumber, Popconfirm, Space, Switch, Table, Tabs, Tag, message } from "antd";
 import { useParams, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, pipelineApi, scheduleApi } from "../api/client";
-import { ExecuteModal } from "../components/ExecuteModal";
-import { ScheduleCreateModal } from "../components/ScheduleCreateModal";
-import type { Schedule } from "../types";
-
-const statusColors: Record<string, string> = {
-  pending: "default", running: "processing", success: "success", failed: "error", cancelled: "warning",
-};
+import { RunModal } from "../components/RunModal";
+import { pipelineStatusLabels, scheduleTypeLabels, statusColors, statusLabels, triggerLabels, triggerModeLabels } from "../labels";
+import type { Pipeline, Schedule } from "../types";
 
 export function PipelineDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [executeOpen, setExecuteOpen] = useState(false);
-  const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
   const [editConcurrent, setEditConcurrent] = useState<number | null>(null);
   const [editTimeout, setEditTimeout] = useState<number | null>(null);
+  const [runOpen, setRunOpen] = useState(false);
+  const [runMode, setRunMode] = useState<"now" | "schedule">("now");
+  const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
 
   const { data: pipeline } = useQuery({
     queryKey: ["pipeline", name],
@@ -42,7 +38,7 @@ export function PipelineDetail() {
       pipelineApi.patch(name!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pipeline", name] });
-      message.success("已保存");
+      message.success("保存成功");
     },
   });
   const toggleMutation = useMutation({
@@ -54,7 +50,7 @@ export function PipelineDetail() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["schedules"] }),
   });
 
-  if (!pipeline) return <div>Loading...</div>;
+  if (!pipeline) return <div>加载中...</div>;
 
   const tabItems = [
     {
@@ -65,10 +61,10 @@ export function PipelineDetail() {
           <Card>
             <Descriptions bordered column={2}>
               <Descriptions.Item label="标识">{pipeline.name}</Descriptions.Item>
-              <Descriptions.Item label="状态"><Tag>{pipeline.status}</Tag></Descriptions.Item>
+              <Descriptions.Item label="状态"><Tag color={pipeline.status === "active" ? "success" : "default"}>{pipelineStatusLabels[pipeline.status] ?? pipeline.status}</Tag></Descriptions.Item>
               <Descriptions.Item label="描述" span={2}>{pipeline.description}</Descriptions.Item>
               <Descriptions.Item label="触发方式">
-                {pipeline.trigger_modes.map((m) => <Tag key={m}>{m}</Tag>)}
+                {pipeline.trigger_modes.map((m) => <Tag key={m}>{triggerModeLabels[m] ?? m}</Tag>)}
               </Descriptions.Item>
               <Descriptions.Item label="最大并发">
                 <Space>
@@ -101,7 +97,7 @@ export function PipelineDetail() {
                 </Space>
               </Descriptions.Item>
               <Descriptions.Item label="创建时间">
-                {new Date(pipeline.created_at).toLocaleString()}
+                {new Date(pipeline.created_at).toLocaleString("zh-CN", { hour12: false })}
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -118,7 +114,7 @@ export function PipelineDetail() {
       label: "调度管理",
       children: (
         <div>
-          <Button type="primary" style={{ marginBottom: 16 }} onClick={() => { setEditSchedule(null); setScheduleOpen(true); }}>
+          <Button type="primary" style={{ marginBottom: 16 }} onClick={() => { setEditSchedule(null); setRunMode("schedule"); setRunOpen(true); }}>
             新建调度
           </Button>
           <Table
@@ -126,16 +122,24 @@ export function PipelineDetail() {
             rowKey="id"
             columns={[
               { title: "名称", dataIndex: "name" },
-              { title: "类型", dataIndex: "trigger_type" },
-              { title: "表达式/间隔", render: (_, r: Schedule) => r.cron_expr || (r.interval_seconds ? `${r.interval_seconds}s` : "-") },
+              { title: "类型", dataIndex: "trigger_type", render: (t: string) => scheduleTypeLabels[t] ?? t },
+              {
+                title: "表达式/间隔/时刻",
+                render: (_, r: Schedule) =>
+                  r.cron_expr ||
+                  (r.interval_seconds ? `${r.interval_seconds}s` : null) ||
+                  (r.run_at ? new Date(r.run_at).toLocaleString("zh-CN", { hour12: false }) : "-"),
+              },
               { title: "启用", render: (_, r: Schedule) => <Switch checked={r.enabled} onChange={() => toggleMutation.mutate(r.id)} /> },
-              { title: "下次执行", dataIndex: "next_run_at", render: (v: string) => v || "-" },
+              { title: "下次执行", dataIndex: "next_run_at", render: (v: string) => v ? new Date(v).toLocaleString("zh-CN", { hour12: false }) : "-" },
               {
                 title: "操作",
                 render: (_, r: Schedule) => (
                   <Space>
-                    <Button size="small" onClick={() => { setEditSchedule(r); setScheduleOpen(true); }}>编辑</Button>
-                    <Button size="small" danger onClick={() => deleteMutation.mutate(r.id)}>删除</Button>
+                    <Button size="small" onClick={() => { setEditSchedule(r); setRunOpen(true); }}>编辑</Button>
+                    <Popconfirm title="确认删除该调度？" onConfirm={() => deleteMutation.mutate(r.id)}>
+                      <Button size="small" danger>删除</Button>
+                    </Popconfirm>
                   </Space>
                 ),
               },
@@ -153,9 +157,9 @@ export function PipelineDetail() {
           rowKey="id"
           onRow={(record) => ({ onClick: () => navigate(`/executions/${record.id}`), style: { cursor: "pointer" } })}
           columns={[
-            { title: "状态", dataIndex: "status", render: (s: string) => <Tag color={statusColors[s]}>{s}</Tag> },
-            { title: "触发方式", dataIndex: "trigger_type" },
-            { title: "开始时间", dataIndex: "started_at", render: (v: string) => v ? new Date(v).toLocaleString() : "-" },
+            { title: "状态", dataIndex: "status", render: (s: string) => <Tag color={statusColors[s]}>{statusLabels[s] ?? s}</Tag> },
+            { title: "触发方式", dataIndex: "trigger_type", render: (t: string) => triggerLabels[t] ?? t },
+            { title: "开始时间", dataIndex: "started_at", render: (v: string) => v ? new Date(v).toLocaleString("zh-CN", { hour12: false }) : "-" },
             {
               title: "耗时",
               render: (_: unknown, r: { started_at: string | null; finished_at: string | null }) => {
@@ -176,17 +180,17 @@ export function PipelineDetail() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <h2>{pipeline.display_name} <Tag color={pipeline.status === "active" ? "success" : "default"}>{pipeline.status}</Tag></h2>
-        <Button type="primary" onClick={() => setExecuteOpen(true)}>立即执行</Button>
+        <h2>{pipeline.display_name} <Tag color={pipeline.status === "active" ? "success" : "default"}>{pipelineStatusLabels[pipeline.status] ?? pipeline.status}</Tag></h2>
+        <Button type="primary" disabled={pipeline.status !== "active"} onClick={() => { setEditSchedule(null); setRunMode("now"); setRunOpen(true); }}>立即执行</Button>
       </div>
 
       <Tabs items={tabItems} />
 
-      <ExecuteModal pipeline={pipeline} open={executeOpen} onClose={() => setExecuteOpen(false)} />
-      <ScheduleCreateModal
-        pipelineId={pipeline.id}
-        open={scheduleOpen}
-        onClose={() => setScheduleOpen(false)}
+      <RunModal
+        open={runOpen}
+        onClose={() => setRunOpen(false)}
+        pipeline={pipeline as Pipeline}
+        mode={runMode}
         editSchedule={editSchedule}
       />
     </div>

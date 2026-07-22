@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler import AsyncScheduler, ConflictPolicy
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -141,7 +142,8 @@ class SchedulerManager:
             conflict_policy=ConflictPolicy.replace,
         )
 
-    def _build_trigger(self, schedule: Schedule):
+    @staticmethod
+    def _build_trigger(schedule: Schedule):
         if schedule.trigger_type == "cron" and schedule.cron_expr:
             parts = schedule.cron_expr.split()
             if len(parts) == 5:
@@ -154,9 +156,16 @@ class SchedulerManager:
                 )
         elif schedule.trigger_type == "interval" and schedule.interval_seconds:
             return IntervalTrigger(seconds=schedule.interval_seconds)
+        elif schedule.trigger_type == "once" and schedule.run_at:
+            # run_at is stored UTC-naive; DateTrigger needs tz-aware local time
+            run_time = schedule.run_at
+            if run_time.tzinfo is None:
+                run_time = run_time.replace(tzinfo=timezone.utc).astimezone()
+            return DateTrigger(run_time=run_time)
         return None
 
     async def _execute_scheduled(self, schedule_id: str, pipeline_id: str) -> None:
+        from backend.models.pipeline import Pipeline
         from backend.services.runner import dispatch_execution
 
         async with self._session_factory() as session:
@@ -166,6 +175,11 @@ class SchedulerManager:
             )
             schedule = result.scalar_one_or_none()
             if schedule is None or not schedule.enabled:
+                return
+
+            # Skip disabled pipelines (job stays registered but produces no execution)
+            pipeline = await session.get(Pipeline, pipeline_id)
+            if pipeline is None or pipeline.status != "active":
                 return
 
             # Create execution record
@@ -179,6 +193,11 @@ class SchedulerManager:
             session.add(execution)
             await session.commit()
             await session.refresh(execution)
+
+            # One-shot schedules auto-disable after firing so restarts don't re-register them
+            if schedule.trigger_type == "once":
+                schedule.enabled = False
+                await session.commit()
 
         await dispatch_execution(execution.id, self._session_factory)
 

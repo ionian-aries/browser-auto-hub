@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import get_settings
 from backend.models.execution import TaskLog
 from backend.services.broadcaster import log_broadcaster
 from backend.storage.minio_client import MinioStorage
@@ -12,11 +11,11 @@ from engine.logger import StepLogger
 class DbStepLogger(StepLogger):
     """StepLogger that writes to DB and broadcasts via SSE."""
 
-    def __init__(self, execution_id: str, session: AsyncSession, storage: MinioStorage):
+    def __init__(self, execution_id: str, session: AsyncSession, storage: MinioStorage, prefix: str):
         super().__init__(execution_id)
         self._session = session
         self._storage = storage
-        self._prefix = get_settings().minio_object_prefix
+        self._prefix = prefix
 
     async def step(
         self,

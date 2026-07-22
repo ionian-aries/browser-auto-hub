@@ -5,14 +5,40 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.config import get_settings
+from backend.config import get_merged_settings
 from backend.models.execution import TaskExecution
 from backend.models.schedule import Schedule
+from backend.models.system_setting import SystemSetting
 from backend.services.broadcaster import log_broadcaster
 from backend.services.step_logger import DbStepLogger
 from backend.storage.minio_client import MinioStorage
 from engine.context import ExecutionContext
 from engine.registry import PipelineRegistry
+
+
+async def _get_global_run_config(session: AsyncSession) -> dict:
+    """Global run settings (system_settings run_*) as config-layer defaults.
+
+    Override chain: these values sit at the bottom — execution.config wins.
+    """
+    result = await session.execute(
+        select(SystemSetting).where(SystemSetting.key.like("run\\_%"))
+    )
+    rows = {row.key: row.value for row in result.scalars()}
+
+    def _int(key: str, default: int) -> int:
+        try:
+            return int(rows[key])
+        except (KeyError, TypeError, ValueError):
+            return default
+
+    return {
+        "headless": rows.get("run_headless", "true") != "false",
+        "close_browser": rows.get("run_close_browser", "true") != "false",
+        "page_load_timeout": _int("run_page_load_timeout", 15000),
+        "element_visible_timeout": _int("run_element_visible_timeout", 5000),
+        "action_settle_timeout": _int("run_action_settle_timeout", 500),
+    }
 
 
 async def dispatch_execution(
@@ -124,9 +150,11 @@ async def _run_execution(
         execution.started_at = datetime.now(timezone.utc)
         await session.commit()
 
-        storage = await MinioStorage.create(session)
-        logger = DbStepLogger(execution_id, session, storage)
-        settings = get_settings()
+        settings = await get_merged_settings(session)
+        storage = MinioStorage(settings=settings)
+        logger = DbStepLogger(
+            execution_id, session, storage, prefix=settings.minio_object_prefix
+        )
 
         ctx = ExecutionContext(
             logger=logger,
@@ -138,9 +166,12 @@ async def _run_execution(
 
         try:
             pipeline = pipeline_cls()
+            # 三级覆盖链：全局运行设置打底，execution.config 覆盖
+            global_run = await _get_global_run_config(session)
+            effective_config = {**global_run, **(execution.config or {})}
             # Execute with timeout
             exec_result = await asyncio.wait_for(
-                pipeline.execute(execution.config or {}, ctx),
+                pipeline.execute(effective_config, ctx),
                 timeout=pipeline_db.timeout_seconds,
             )
 

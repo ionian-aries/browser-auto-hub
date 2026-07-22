@@ -4,7 +4,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_merged_settings, get_settings, write_env_value
-from backend.database import _get_engine, get_session, mask_db_url, swap_engine
+from backend.database import _get_engine, get_session, swap_engine
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 
@@ -52,13 +52,21 @@ async def get_system_settings(session: AsyncSession = Depends(get_session)):
     return {
         "minio_endpoint": merged.minio_endpoint,
         "minio_access_key": merged.minio_access_key,
-        "minio_secret_key": MASKED,  # never return the real secret
+        "minio_secret_key": merged.minio_secret_key,
         "minio_bucket": merged.minio_bucket,
         "minio_object_prefix": merged.minio_object_prefix,
         "minio_presign_expires_seconds": merged.minio_presign_expires_seconds,
         "log_retention_days": _safe_int(rows.get("log_retention_days", "30"), 30),
         "scheduler_enabled": rows.get("scheduler_enabled", "true") != "false",
-        "database_url": mask_db_url(get_settings().database_url),
+        "database_url": get_settings().database_url,
+        # 全局运行设置（三级覆盖链底层，见 spec 4 §8.2）
+        "run_headless": rows.get("run_headless", "true") != "false",
+        "run_close_browser": rows.get("run_close_browser", "true") != "false",
+        "run_page_load_timeout": _safe_int(rows.get("run_page_load_timeout", "15000"), 15000),
+        "run_element_visible_timeout": _safe_int(rows.get("run_element_visible_timeout", "5000"), 5000),
+        "run_action_settle_timeout": _safe_int(rows.get("run_action_settle_timeout", "500"), 500),
+        "run_default_max_retries": _safe_int(rows.get("run_default_max_retries", "0"), 0),
+        "run_default_retry_delay_seconds": _safe_int(rows.get("run_default_retry_delay_seconds", "60"), 60),
     }
 
 
@@ -72,6 +80,13 @@ class SettingsUpdate(BaseModel):
     log_retention_days: int | None = None
     scheduler_enabled: bool | None = None
     database_url: str | None = None
+    run_headless: bool | None = None
+    run_close_browser: bool | None = None
+    run_page_load_timeout: int | None = None
+    run_element_visible_timeout: int | None = None
+    run_action_settle_timeout: int | None = None
+    run_default_max_retries: int | None = None
+    run_default_retry_delay_seconds: int | None = None
 
 
 @router.put("/settings")
@@ -117,7 +132,7 @@ async def update_system_settings(
     # Database URL hot-swap last: the request-scoped session above belongs to
     # the old engine and must not be used afterwards.
     if new_db_url is not None:
-        if MASKED not in new_db_url and new_db_url != get_settings().database_url:
+        if new_db_url and new_db_url != get_settings().database_url:
             try:
                 await swap_engine(new_db_url)
             except Exception as e:

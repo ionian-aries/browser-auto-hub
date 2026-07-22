@@ -3,11 +3,10 @@ import { Button, Card, Col, Empty, Image, Row, Tag, message } from "antd";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, fileApi } from "../api/client";
+import { statusColors, statusLabels, triggerLabels } from "../labels";
 import type { Artifact, LogEntry } from "../types";
 
-const statusColors: Record<string, string> = {
-  pending: "default", running: "processing", success: "success", failed: "error", cancelled: "warning",
-};
+const levelLabels: Record<string, string> = { all: "全部", info: "信息", warn: "警告", error: "错误" };
 const levelColors: Record<string, string> = { info: "#1890ff", warn: "#faad14", error: "#ff4d4f" };
 const levelIcons: Record<string, string> = { info: "●", warn: "▲", error: "✕" };
 const stepColors = ["#1890ff", "#52c41a", "#722ed1", "#fa8c16", "#13c2c2", "#eb2f96"];
@@ -34,8 +33,12 @@ export function ExecutionDetail() {
     queryKey: ["execution", id],
     queryFn: () => executionApi.get(id!),
     enabled: !!id,
-    refetchInterval: (query) =>
-      query.state.data?.status === "running" ? 3000 : false,
+    refetchInterval: (query) => {
+      // pending 也必须轮询：后端无排队机制，pending→running 为毫秒级；
+      // 只轮询 running 会让落在 pending 的页面永久停留「排队中」（死端，spec §6.3）
+      const s = query.state.data?.status;
+      return s === "pending" || s === "running" ? 3000 : false;
+    },
   });
   const { data: artifacts } = useQuery({
     queryKey: ["artifacts", id],
@@ -91,7 +94,7 @@ export function ExecutionDetail() {
     });
   }, [logs]);
 
-  if (!execution) return <div>Loading...</div>;
+  if (!execution) return <div>加载中...</div>;
 
   const filteredLogs = filter === "all" ? logs : logs.filter((l) => l.level === filter);
   const duration = execution.started_at
@@ -108,14 +111,16 @@ export function ExecutionDetail() {
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
         <div>
           <h2 style={{ display: "inline" }}>
-            <Link to={`/pipelines/${execution.pipeline_name}`}>{execution.pipeline_name}</Link>
+            <Link to={`/pipelines/${execution.pipeline_name}`}>
+              {execution.pipeline_display_name ?? execution.pipeline_name}
+            </Link>
             {" "}
             <span style={{ fontSize: 14, color: "#999" }}>#{execution.id.slice(0, 8)}</span>
           </h2>
           <div style={{ marginTop: 8 }}>
-            <Tag color={statusColors[execution.status]}>{execution.status}</Tag>
-            <Tag>{execution.trigger_type}</Tag>
-            {execution.started_at && <span style={{ color: "#666" }}>{new Date(execution.started_at).toLocaleString()}</span>}
+            <Tag color={statusColors[execution.status]}>{statusLabels[execution.status] ?? execution.status}</Tag>
+            <Tag>{triggerLabels[execution.trigger_type] ?? execution.trigger_type}</Tag>
+            {execution.started_at && <span style={{ color: "#666" }}>{new Date(execution.started_at).toLocaleString("zh-CN", { hour12: false })}</span>}
             {duration > 0 && <span style={{ color: "#666", marginLeft: 8 }}>耗时 {duration}s</span>}
           </div>
         </div>
@@ -140,7 +145,7 @@ export function ExecutionDetail() {
                     style={{ cursor: "pointer" }}
                     onClick={() => setFilter(level)}
                   >
-                    {level === "all" ? "全部" : level}
+                    {levelLabels[level]}
                   </Tag>
                 ))}
               </span>
@@ -164,7 +169,7 @@ export function ExecutionDetail() {
                     marginBottom: 2,
                   }}
                 >
-                  <span style={{ color: "#999" }}>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                  <span style={{ color: "#999" }}>{new Date(log.timestamp).toLocaleTimeString("zh-CN", { hour12: false })}</span>
                   {" "}
                   <Tag color={getStepColor(log.step, stepColorMap.current)} style={{ fontSize: 11 }}>
                     {log.step}

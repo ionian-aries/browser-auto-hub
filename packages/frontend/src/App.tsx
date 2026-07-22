@@ -4,6 +4,7 @@ import { MainLayout } from "./layouts/MainLayout";
 import { Dashboard } from "./pages/Dashboard";
 import { Pipelines } from "./pages/Pipelines";
 import { PipelineDetail } from "./pages/PipelineDetail";
+import { Schedules } from "./pages/Schedules";
 import { Executions } from "./pages/Executions";
 import { ExecutionDetail } from "./pages/ExecutionDetail";
 import { Settings } from "./pages/Settings";
@@ -19,6 +20,7 @@ export function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/pipelines" element={<Pipelines />} />
             <Route path="/pipelines/:name" element={<PipelineDetail />} />
+            <Route path="/schedules" element={<Schedules />} />
             <Route path="/executions" element={<Executions />} />
             <Route path="/executions/:id" element={<ExecutionDetail />} />
             <Route path="/settings" element={<Settings />} />

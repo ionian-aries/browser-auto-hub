@@ -1,28 +1,54 @@
 import { useState } from "react";
-import { DatePicker, Select, Table, Tag } from "antd";
-import { useQuery } from "@tanstack/react-query";
+import { Button, DatePicker, Popconfirm, Select, Table, Tag, message } from "antd";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, Link } from "react-router-dom";
+import type { Dayjs } from "dayjs";
 import { executionApi, pipelineApi } from "../api/client";
+import { statusColors, statusLabels, triggerLabels } from "../labels";
 import type { Execution } from "../types";
 
 const { RangePicker } = DatePicker;
 
-const statusColors: Record<string, string> = {
-  pending: "default", running: "processing", success: "success", failed: "error", cancelled: "warning",
-};
-
 export function Executions() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [pipelineFilter, setPipelineFilter] = useState<string | undefined>();
   const [statusFilter, setStatusFilter] = useState<string[] | undefined>();
-  const [dateRange, setDateRange] = useState<[Date, Date] | null>(null);
+  const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [page, setPage] = useState(1);
 
   const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: pipelineApi.list });
   const { data: executions, isLoading } = useQuery({
-    queryKey: ["executions", { pipeline: pipelineFilter, status: statusFilter?.join(","), page }],
-    queryFn: () => executionApi.list({ pipeline: pipelineFilter, status: statusFilter?.join(","), page }),
+    queryKey: [
+      "executions",
+      {
+        pipeline: pipelineFilter,
+        status: statusFilter?.join(","),
+        start: dateRange?.[0]?.toISOString(),
+        end: dateRange?.[1]?.toISOString(),
+        page,
+      },
+    ],
+    queryFn: () =>
+      executionApi.list({
+        pipeline: pipelineFilter,
+        status: statusFilter?.join(","),
+        start: dateRange?.[0]?.toISOString(),
+        end: dateRange?.[1]?.toISOString(),
+        page,
+      }),
     refetchInterval: 5000,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => executionApi.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["executions"] });
+      message.success("删除成功");
+    },
+    onError: () => {
+      message.error("删除失败");
+    },
   });
 
   return (
@@ -31,7 +57,7 @@ export function Executions() {
 
       <div style={{ marginBottom: 16, display: "flex", gap: 12 }}>
         <Select
-          placeholder="全部 Pipeline"
+          placeholder="全部流水线"
           allowClear
           style={{ width: 200 }}
           value={pipelineFilter}
@@ -49,14 +75,17 @@ export function Executions() {
           value={statusFilter}
           onChange={(v) => { setStatusFilter(v.length ? v : undefined); setPage(1); }}
         >
-          {["pending", "running", "success", "failed", "cancelled"].map((s) => (
-            <Select.Option key={s} value={s}>{s}</Select.Option>
+          {Object.entries(statusLabels).map(([value, label]) => (
+            <Select.Option key={value} value={value}>{label}</Select.Option>
           ))}
         </Select>
         <RangePicker
+          showTime={{ format: "HH:mm" }}
+          format="YYYY-MM-DD HH:mm"
+          placeholder={["开始时间", "结束时间"]}
           onChange={(dates) => {
             if (dates && dates[0] && dates[1]) {
-              setDateRange([dates[0].toDate(), dates[1].toDate()]);
+              setDateRange([dates[0], dates[1]]);
             } else {
               setDateRange(null);
             }
@@ -66,18 +95,7 @@ export function Executions() {
       </div>
 
       <Table
-        dataSource={
-          executions && dateRange
-            ? executions.filter((e: Execution) => {
-                const created = e.created_at ? new Date(e.created_at).getTime() : 0;
-                const startOfDay = new Date(dateRange[0]);
-                startOfDay.setHours(0, 0, 0, 0);
-                const endOfDay = new Date(dateRange[1]);
-                endOfDay.setHours(23, 59, 59, 999);
-                return created >= startOfDay.getTime() && created <= endOfDay.getTime();
-              })
-            : executions
-        }
+        dataSource={executions}
         rowKey="id"
         loading={isLoading}
         onRow={(record) => ({
@@ -87,20 +105,28 @@ export function Executions() {
         pagination={{ current: page, pageSize: 20, onChange: setPage }}
         columns={[
           {
-            title: "Pipeline",
-            dataIndex: "pipeline_name",
-            render: (name: string) => name ? <Link to={`/pipelines/${name}`}>{name}</Link> : "-",
+            title: "流水线",
+            render: (_: unknown, r: Execution) =>
+              r.pipeline_name ? (
+                <Link to={`/pipelines/${r.pipeline_name}`}>{r.pipeline_display_name ?? r.pipeline_name}</Link>
+              ) : (
+                "-"
+              ),
           },
           {
             title: "状态",
             dataIndex: "status",
-            render: (s: string) => <Tag color={statusColors[s]}>{s}</Tag>,
+            render: (s: string) => <Tag color={statusColors[s]}>{statusLabels[s] ?? s}</Tag>,
           },
-          { title: "触发方式", dataIndex: "trigger_type" },
+          {
+            title: "触发方式",
+            dataIndex: "trigger_type",
+            render: (t: string) => triggerLabels[t] ?? t,
+          },
           {
             title: "开始时间",
             dataIndex: "started_at",
-            render: (v: string) => v ? new Date(v).toLocaleString() : "-",
+            render: (v: string) => v ? new Date(v).toLocaleString("zh-CN", { hour12: false }) : "-",
           },
           {
             title: "耗时",
@@ -118,9 +144,33 @@ export function Executions() {
           },
           {
             title: "结果",
-            dataIndex: "result_summary",
-            render: (v: Record<string, unknown> | null) =>
-              v ? <span style={{ color: "#666" }}>{JSON.stringify(v).slice(0, 40)}</span> : "-",
+            render: (_: unknown, r: Execution) => {
+              if (r.result_summary) {
+                return <span style={{ color: "#666" }}>{JSON.stringify(r.result_summary).slice(0, 40)}</span>;
+              }
+              if (r.error_message) {
+                return <span style={{ color: "#ff4d4f" }}>{r.error_message.slice(0, 40)}</span>;
+              }
+              return "-";
+            },
+          },
+          {
+            title: "操作",
+            render: (_: unknown, r: Execution) =>
+              r.status !== "pending" && r.status !== "running" ? (
+                // React portal 合成事件沿组件树冒泡：必须拦截，否则确认删除会触发行 onClick 误入详情
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Popconfirm
+                    title="确认删除该执行记录？"
+                    description="仅删除执行记录与关联日志；MinIO 文件与业务数据不受影响"
+                    onConfirm={() => deleteMutation.mutate(r.id)}
+                  >
+                    <Button size="small" danger>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                </span>
+              ) : null,
           },
         ]}
       />

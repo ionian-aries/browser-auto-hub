@@ -17,6 +17,7 @@ class Schedule(Base):
     )
     cron_expr: Mapped[str | None] = mapped_column(String(100), nullable=True)
     interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     config_override: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

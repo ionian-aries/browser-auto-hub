@@ -2,29 +2,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from backend.config import get_merged_settings, write_env_value
-from backend.database import mask_db_url
 from backend.models.system_setting import SystemSetting
-
-
-# --- mask_db_url ---
-
-
-def test_mask_db_url_hides_password():
-    masked = mask_db_url(
-        "mysql+aiomysql://root:supersecret@db.host:3306/browser_auto_hub?charset=utf8mb4"
-    )
-    assert "supersecret" not in masked
-    assert "***" in masked
-    assert "root" in masked
-    assert "db.host:3306" in masked
-    assert "browser_auto_hub" in masked
-    assert "charset=utf8mb4" in masked
-
-
-def test_mask_db_url_without_password_unchanged():
-    masked = mask_db_url("sqlite+aiosqlite:///./local.db")
-    assert "sqlite" in masked
-    assert "local.db" in masked
 
 
 # --- write_env_value ---

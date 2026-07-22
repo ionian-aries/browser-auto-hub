@@ -1,12 +1,8 @@
 import importlib
 import pkgutil
 import sys
-from typing import TYPE_CHECKING
 
 from engine.base import BasePipeline, PipelineMetadata
-
-if TYPE_CHECKING:
-    pass
 
 
 class PipelineRegistry:

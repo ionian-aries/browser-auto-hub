@@ -16,10 +16,12 @@ export interface Schedule {
   id: string;
   pipeline_id: string;
   pipeline_name: string | null;
+  pipeline_display_name: string | null;
   name: string;
   trigger_type: "cron" | "interval" | "once";
   cron_expr: string | null;
   interval_seconds: number | null;
+  run_at: string | null;
   config_override: Record<string, unknown> | null;
   enabled: boolean;
   next_run_at: string | null;
@@ -33,6 +35,7 @@ export interface Execution {
   id: string;
   pipeline_id: string;
   pipeline_name: string | null;
+  pipeline_display_name: string | null;
   schedule_id: string | null;
   trigger_type: "scheduled" | "api" | "manual";
   status: "pending" | "running" | "success" | "failed" | "cancelled";
@@ -76,6 +79,14 @@ export interface SystemSettings {
   log_retention_days: number;
   scheduler_enabled: boolean;
   database_url: string;
+  // 全局运行设置（三级覆盖链底层）
+  run_headless: boolean;
+  run_close_browser: boolean;
+  run_page_load_timeout: number;
+  run_element_visible_timeout: number;
+  run_action_settle_timeout: number;
+  run_default_max_retries: number;
+  run_default_retry_delay_seconds: number;
 }
 
 export interface Artifact {
