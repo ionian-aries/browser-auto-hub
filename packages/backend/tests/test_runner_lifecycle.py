@@ -53,6 +53,7 @@ def _session(execution, concurrency=0, commit_side_effects=None):
     s = AsyncMock()
     s.execute.side_effect = [
         _result(scalar_one_or_none=execution),  # select execution FOR UPDATE
+        _result(),  # select pipeline FOR UPDATE（并发检查串行化）
         _result(scalar=concurrency),  # _check_concurrency
         _result(scalars=[]),  # get_merged_settings
         _result(scalars=[]),  # _get_global_run_config
@@ -112,6 +113,22 @@ async def test_cancel_unknown_execution_returns_false():
 
 
 # ---------- B4: busy 不再制造伪 failed ----------
+
+
+@pytest.mark.asyncio
+async def test_concurrency_check_locks_pipeline_row(_patched):
+    """TOCTOU：并发检查前必须 FOR UPDATE 锁 pipeline 行，串行化同 pipeline 的并发派发。"""
+    execution = _execution()
+    session = _session(execution)
+    factory = MagicMock(return_value=_SessionCM(session))
+
+    await runner._run_execution("exec-1", factory)
+
+    stmts = [c.args[0] for c in session.execute.call_args_list]
+    assert len(stmts) >= 2
+    lock_sql = str(stmts[1].compile(compile_kwargs={"literal_binds": True})).upper()
+    assert "PIPELINES" in lock_sql
+    assert "FOR UPDATE" in lock_sql
 
 
 @pytest.mark.asyncio
