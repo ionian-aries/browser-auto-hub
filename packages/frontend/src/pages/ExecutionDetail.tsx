@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Col, Empty, Image, Row, Tag, message } from "antd";
+import { Button, Card, Col, Empty, Image, Result, Row, Tag, message } from "antd";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, fileApi } from "../api/client";
@@ -30,7 +30,7 @@ export function ExecutionDetail() {
   const stepColorMap = useRef(new Map<string, string>());
   const loadedKeysRef = useRef(new Set<string>());
 
-  const { data: execution } = useQuery({
+  const { data: execution, error: executionError } = useQuery({
     queryKey: ["execution", id],
     queryFn: () => executionApi.get(id!),
     enabled: !!id,
@@ -125,6 +125,16 @@ export function ExecutionDetail() {
     });
   }, [logs]);
 
+  if (executionError) {
+    return (
+      <Result
+        status="404"
+        title="执行记录不存在"
+        subTitle="该执行可能已被删除，或链接有误"
+        extra={<Link to="/executions"><Button type="primary">返回执行列表</Button></Link>}
+      />
+    );
+  }
   if (!execution) return <div>加载中...</div>;
 
   const filteredLogs = filter === "all" ? logs : logs.filter((l) => l.level === filter);

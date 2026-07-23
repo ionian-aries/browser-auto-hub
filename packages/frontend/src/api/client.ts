@@ -1,4 +1,5 @@
 import axios from "axios";
+import { message } from "antd";
 import type {
   Artifact,
   Execution,
@@ -11,6 +12,25 @@ import type {
 } from "../types";
 
 const api = axios.create({ baseURL: "/api" });
+
+// 统一错误提示：优先展示后端 detail；GET 404 交给详情页渲染错误态，不弹全局提示
+api.interceptors.response.use(
+  (resp) => resp,
+  (err) => {
+    const isGet404 = err.config?.method === "get" && err.response?.status === 404;
+    if (!isGet404) {
+      const detail = err.response?.data?.detail;
+      const text =
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join("；")
+            : "";
+      message.error(text || "请求失败，请稍后重试");
+    }
+    return Promise.reject(err);
+  }
+);
 
 export const pipelineApi = {
   list: () => api.get<Pipeline[]>("/pipelines").then((r) => r.data),
