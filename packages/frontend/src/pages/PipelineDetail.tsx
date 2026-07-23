@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Card, Descriptions, InputNumber, Popconfirm, Space, Switch, Table, Tabs, Tag, message } from "antd";
+import { Button, Card, Descriptions, InputNumber, Popconfirm, Result, Space, Switch, Table, Tabs, Tag, message } from "antd";
 import { useParams, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, pipelineApi, scheduleApi } from "../api/client";
@@ -17,7 +17,7 @@ export function PipelineDetail() {
   const [runMode, setRunMode] = useState<"now" | "schedule">("now");
   const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
 
-  const { data: pipeline } = useQuery({
+  const { data: pipeline, error: pipelineError } = useQuery({
     queryKey: ["pipeline", name],
     queryFn: () => pipelineApi.get(name!),
     enabled: !!name,
@@ -50,6 +50,16 @@ export function PipelineDetail() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["schedules"] }),
   });
 
+  if (pipelineError) {
+    return (
+      <Result
+        status="404"
+        title="流水线不存在"
+        subTitle="该流水线可能已被移除，或链接有误"
+        extra={<Button type="primary" onClick={() => navigate("/pipelines")}>返回流水线列表</Button>}
+      />
+    );
+  }
   if (!pipeline) return <div>加载中...</div>;
 
   const tabItems = [
