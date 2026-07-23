@@ -127,3 +127,8 @@ async def test_list_executions_returns_total():
     body = resp.json()
     assert body["total"] == 42
     assert body["items"] == []
+
+    # UUID 主键无顺序意义：必须按 created_at 倒序
+    stmt = session.execute.call_args.args[0]
+    sql = str(stmt.compile()).lower()
+    assert "order by" in sql and "created_at desc" in sql

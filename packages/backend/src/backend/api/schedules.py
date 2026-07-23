@@ -65,7 +65,8 @@ async def list_schedules(
     stmt = (
         select(Schedule)
         .options(selectinload(Schedule.pipeline))
-        .order_by(Schedule.id.desc())
+        # UUID 主键无顺序意义：按创建时间倒序，id 作同秒兜底
+        .order_by(Schedule.created_at.desc(), Schedule.id.desc())
     )
     if pipeline_id:
         stmt = stmt.where(Schedule.pipeline_id == pipeline_id)
