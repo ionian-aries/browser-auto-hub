@@ -77,3 +77,27 @@ def test_discover_finds_pipelines_in_subdirectories():
     # After Task 7 implements the OA pipeline, this will find oa.communicate_todos
     # For now, just verify discover() doesn't crash on nested packages
     assert "example" in PipelineRegistry.all()
+
+
+def test_discover_logs_import_errors(caplog, monkeypatch):
+    """导入失败的模块必须留痕（warning + traceback），不能静默吞掉。"""
+    import logging
+
+    import engine.registry as reg
+
+    PipelineRegistry._pipelines["sentinel"] = object  # 避免触发 reload 路径
+    monkeypatch.setattr(
+        reg.pkgutil,
+        "walk_packages",
+        lambda *a, **k: [(None, "engine.pipelines.broken_mod", False)],
+    )
+
+    def _raise_import(name):
+        raise ImportError("No module named 'foo'")
+
+    monkeypatch.setattr(reg.importlib, "import_module", _raise_import)
+
+    with caplog.at_level(logging.WARNING, logger="engine.registry"):
+        PipelineRegistry.discover()
+
+    assert "engine.pipelines.broken_mod" in caplog.text
