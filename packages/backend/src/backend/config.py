@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     minio_presign_expires_seconds: int = 604800
     app_secret_key: str = "changeme"
     app_log_level: str = "INFO"
+    cors_origins: str = "*"  # 逗号分隔；生产环境应收紧为具体域名
 
     model_config = {"env_file": str(ENV_PATH), "env_file_encoding": "utf-8", "extra": "ignore"}
 

@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.executions import router as executions_router
 from backend.api.files import router as files_router
@@ -97,6 +98,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Browser Auto Hub", version="0.1.0", lifespan=lifespan)
+
+_cors_origins = [
+    o.strip() for o in get_settings().cors_origins.split(",") if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=False,
+)
+
 app.include_router(system_router)
 app.include_router(pipelines_router)
 app.include_router(schedules_router)
