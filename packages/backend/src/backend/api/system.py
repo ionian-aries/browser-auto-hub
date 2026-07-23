@@ -148,7 +148,9 @@ async def test_storage(session: AsyncSession = Depends(get_session)):
         from backend.storage.minio_client import MinioStorage
 
         storage = await MinioStorage.create(session)
-        storage.ensure_bucket()
+        import asyncio
+
+        await asyncio.to_thread(storage.ensure_bucket)  # boto3 同步调用移出事件循环
         return {"status": "ok", "message": "MinIO connection successful"}
     except Exception as e:
         raise HTTPException(500, f"MinIO connection failed: {e}")

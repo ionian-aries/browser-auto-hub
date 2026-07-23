@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +30,10 @@ class DbStepLogger(StepLogger):
 
         if screenshot:
             screenshot_key = f"{self._prefix}/screenshots/{self.execution_id}/{name}_{now.strftime('%H%M%S%f')}.png"
-            self._storage.upload(screenshot_key, screenshot, "image/png")
+            # boto3 是同步 SDK：放到线程执行，避免阻塞事件循环
+            await asyncio.to_thread(
+                self._storage.upload, screenshot_key, screenshot, "image/png"
+            )
 
         log = TaskLog(
             execution_id=self.execution_id,
