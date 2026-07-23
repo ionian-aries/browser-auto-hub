@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+import asyncio
+import logging
 
 from fastapi import FastAPI
 
@@ -12,8 +14,11 @@ from backend.database import get_engine, get_session_factory
 from backend.models import Base
 from backend.scheduler.manager import SchedulerManager
 from backend.services.pipeline_sync import sync_pipelines_to_db
+from backend.storage.minio_client import MinioStorage
 
 import backend.scheduler.manager as scheduler_mod
+
+logger = logging.getLogger(__name__)
 
 
 async def _ensure_columns(conn) -> None:
@@ -49,6 +54,16 @@ async def lifespan(app: FastAPI):
     # Sync pipeline registry to DB
     async with session_factory() as session:
         await sync_pipelines_to_db(session)
+
+    # MinIO bucket 启动就绪（boto3 同步调用放线程；失败仅告警，运行时才硬报错）
+    try:
+        async with session_factory() as session:
+            storage = await MinioStorage.create(session)
+        await asyncio.to_thread(storage.ensure_bucket)
+    except Exception:
+        logger.warning(
+            "MinIO bucket 初始化失败：截图/产物上传将在运行时报错", exc_info=True
+        )
 
     # Start scheduler
     scheduler = SchedulerManager(session_factory)
