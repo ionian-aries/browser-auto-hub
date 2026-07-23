@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_merged_settings
 from backend.models.execution import TaskExecution
+from backend.models.pipeline import Pipeline
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 from backend.services.broadcaster import log_broadcaster
@@ -194,7 +195,13 @@ async def _run_execution(
             await session.commit()
             return
 
-        # Concurrency check (row locked — prevents TOCTOU race)
+        # 锁 pipeline 行：并发检查 → 置 running 之间串行化同 pipeline 的并发派发。
+        # （此前只锁执行自己的行，两个执行可同时通过计数检查 — TOCTOU）
+        await session.execute(
+            select(Pipeline).where(Pipeline.id == pipeline_db.id).with_for_update()
+        )
+
+        # Concurrency check
         if not await _check_concurrency(
             session, pipeline_db.id, pipeline_db.max_concurrent
         ):
