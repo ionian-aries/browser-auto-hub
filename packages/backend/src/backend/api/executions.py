@@ -70,7 +70,8 @@ async def list_executions(
     stmt = (
         select(TaskExecution)
         .options(selectinload(TaskExecution.pipeline))
-        .order_by(TaskExecution.id.desc())
+        # UUID 主键无顺序意义：按创建时间倒序，id 作同秒兜底
+        .order_by(TaskExecution.created_at.desc(), TaskExecution.id.desc())
     )
     count_stmt = select(func.count()).select_from(TaskExecution)
     if pipeline:
