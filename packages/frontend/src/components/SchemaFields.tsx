@@ -1,4 +1,4 @@
-import { Col, Form, Input, InputNumber, Row } from "antd";
+import { Col, Form, Input, InputNumber, Row, Switch } from "antd";
 
 interface SchemaProperty {
   type?: string;
@@ -34,7 +34,10 @@ export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, see
 
   const items = entries.map(([key, prop]) => {
     const isRequired = required.includes(key);
-    const isPassword = prop.description?.includes("密码");
+    // 密码启发式：description 含「密码」或字段名命中常见敏感词
+    const isPassword =
+      prop.description?.includes("密码") || /password|passwd|secret|token/i.test(key);
+    const isBoolean = prop.type === "boolean";
     const label = prop.description || key;
     const initialValue = defaults && key in defaults ? defaults[key] : prop.default;
 
@@ -44,10 +47,13 @@ export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, see
         name={[...namePrefix, key]}
         label={label}
         {...(seedDefaults ? { initialValue } : {})}
-        rules={isRequired ? [{ required: true, message: `请输入${label}` }] : []}
+        {...(isBoolean ? { valuePropName: "checked" } : {})}
+        rules={isRequired && !isBoolean ? [{ required: true, message: `请输入${label}` }] : []}
       >
         {prop.type === "integer" ? (
           <InputNumber style={{ width: "100%" }} />
+        ) : isBoolean ? (
+          <Switch />
         ) : isPassword ? (
           <Input.Password />
         ) : (
