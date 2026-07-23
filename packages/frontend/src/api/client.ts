@@ -42,7 +42,10 @@ export const scheduleApi = {
 
 export const executionApi = {
   list: (params?: { pipeline?: string; status?: string; start?: string; end?: string; page?: number; page_size?: number }) =>
-    api.get<Execution[]>("/executions", { params }).then((r) => r.data),
+    api.get<{ total: number; items: Execution[] }>("/executions", { params }).then((r) => r.data),
+  /** 只要条目数组的便捷封装（Dashboard/Pipelines/PipelineDetail 用） */
+  listItems: (params?: { pipeline?: string; status?: string; page?: number; page_size?: number }) =>
+    api.get<{ total: number; items: Execution[] }>("/executions", { params }).then((r) => r.data.items),
   get: (id: string) => api.get<Execution>(`/executions/${id}`).then((r) => r.data),
   create: (data: { pipeline: string; config?: Record<string, unknown>; trigger_type?: string }) =>
     api.post<Execution>("/executions", data).then((r) => r.data),

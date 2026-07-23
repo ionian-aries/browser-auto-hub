@@ -11,7 +11,11 @@ from sse_starlette.sse import EventSourceResponse
 from backend.database import get_session
 from backend.models.execution import TaskExecution, TaskLog
 from backend.models.pipeline import Pipeline
-from backend.schemas.execution import ExecutionCreate, ExecutionResponse
+from backend.schemas.execution import (
+    ExecutionCreate,
+    ExecutionListResponse,
+    ExecutionResponse,
+)
 from backend.services.broadcaster import log_broadcaster
 
 router = APIRouter(prefix="/api/executions", tags=["executions"])
@@ -53,7 +57,7 @@ async def create_execution(
     return resp
 
 
-@router.get("", response_model=list[ExecutionResponse])
+@router.get("", response_model=ExecutionListResponse)
 async def list_executions(
     pipeline: str | None = None,
     status: str | None = None,
@@ -68,14 +72,25 @@ async def list_executions(
         .options(selectinload(TaskExecution.pipeline))
         .order_by(TaskExecution.id.desc())
     )
+    count_stmt = select(func.count()).select_from(TaskExecution)
     if pipeline:
         stmt = stmt.join(Pipeline).where(Pipeline.name == pipeline)
+        count_stmt = count_stmt.join(Pipeline).where(Pipeline.name == pipeline)
     if status:
         stmt = stmt.where(TaskExecution.status.in_(status.split(",")))
+        count_stmt = count_stmt.where(TaskExecution.status.in_(status.split(",")))
     if start:
         stmt = stmt.where(TaskExecution.created_at >= start.replace(tzinfo=None))
+        count_stmt = count_stmt.where(
+            TaskExecution.created_at >= start.replace(tzinfo=None)
+        )
     if end:
         stmt = stmt.where(TaskExecution.created_at <= end.replace(tzinfo=None))
+        count_stmt = count_stmt.where(
+            TaskExecution.created_at <= end.replace(tzinfo=None)
+        )
+
+    total = await session.scalar(count_stmt) or 0
     stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     result = await session.execute(stmt)
@@ -86,7 +101,7 @@ async def list_executions(
             resp.pipeline_name = e.pipeline.name
             resp.pipeline_display_name = e.pipeline.display_name
         out.append(resp)
-    return out
+    return {"total": total, "items": out}
 
 
 @router.get("/stats")
