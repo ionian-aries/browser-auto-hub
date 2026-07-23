@@ -24,10 +24,10 @@ class Schedule(Base):
     max_retries: Mapped[int] = mapped_column(Integer, default=0)
     retry_delay_seconds: Mapped[int] = mapped_column(Integer, default=60)
     created_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, server_default=func.now()
+        UTCDateTime, server_default=func.utc_timestamp()
     )
     updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, server_default=func.now(), onupdate=func.now()
+        UTCDateTime, server_default=func.utc_timestamp(), onupdate=func.utc_timestamp()
     )
 
     pipeline = relationship("Pipeline", back_populates="schedules")
