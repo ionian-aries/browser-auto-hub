@@ -42,10 +42,10 @@ async def create_execution(
     await session.commit()
     await session.refresh(execution)
 
-    from backend.scheduler.manager import scheduler_manager
-    if scheduler_manager and hasattr(scheduler_manager, '_session_factory'):
-        from backend.services.runner import dispatch_execution
-        await dispatch_execution(execution.id, scheduler_manager._session_factory)
+    # 直接经全局 session_factory 派发；scheduler 缺席时执行不再空转
+    from backend.database import get_session_factory
+    from backend.services.runner import dispatch_execution
+    await dispatch_execution(execution.id, get_session_factory())
 
     resp = ExecutionResponse.model_validate(execution)
     resp.pipeline_name = pipeline.name
