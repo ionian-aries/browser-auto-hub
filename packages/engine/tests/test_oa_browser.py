@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from engine.pipelines.oa.shared import browser as browser_mod
@@ -95,3 +97,36 @@ async def test_oa_browser_close_browser_false(monkeypatch):
     async with browser_mod.oa_browser({"close_browser": False}):
         pass
     assert not browser.closed
+
+
+class SlowCloseBrowser(FakeBrowser):
+    def __init__(self):
+        super().__init__()
+        self.close_started = asyncio.Event()
+
+    async def close(self):
+        self.close_started.set()
+        await asyncio.sleep(0.2)
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_oa_browser_close_survives_double_cancel(monkeypatch):
+    """超时取消后 close 进行中又遇手动 cancel：close 不得被打断（chromium 进程泄漏）。"""
+    browser = SlowCloseBrowser()
+    _patch(monkeypatch, browser)
+
+    async def _use():
+        async with browser_mod.oa_browser({}):
+            await asyncio.sleep(60)
+
+    task = asyncio.create_task(_use())
+    await asyncio.sleep(0.02)
+    task.cancel()  # 第一次取消（如 runner 超时）
+    await browser.close_started.wait()
+    task.cancel()  # 第二次取消（cancel 端点竞态）
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.sleep(0.3)
+    assert browser.closed  # close 在后台完成，进程不泄漏
