@@ -1,8 +1,11 @@
 import importlib
+import logging
 import pkgutil
 import sys
 
 from engine.base import BasePipeline, PipelineMetadata
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineRegistry:
@@ -42,7 +45,12 @@ class PipelineRegistry:
                 else:
                     importlib.import_module(modname)
             except ImportError:
-                pass  # Skip modules with missing optional dependencies
+                # 可选依赖缺失允许跳过，但必须留痕，否则 pipeline 静默消失难排查
+                logger.warning(
+                    "跳过 pipeline 模块 %s：导入失败（依赖缺失或模块错误）",
+                    modname,
+                    exc_info=True,
+                )
 
 
 def register_pipeline(**kwargs):
