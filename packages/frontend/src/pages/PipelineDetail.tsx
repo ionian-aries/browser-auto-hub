@@ -29,7 +29,7 @@ export function PipelineDetail() {
   });
   const { data: executions } = useQuery({
     queryKey: ["executions", { pipeline: name }],
-    queryFn: () => executionApi.list({ pipeline: name }),
+    queryFn: () => executionApi.listItems({ pipeline: name }),
     enabled: !!name,
   });
 

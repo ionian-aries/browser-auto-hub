@@ -24,7 +24,7 @@ export function Pipelines() {
   const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: pipelineApi.list });
   const { data: executions } = useQuery({
     queryKey: ["executions", { page_size: 100 }],
-    queryFn: () => executionApi.list({ page_size: 100 }),
+    queryFn: () => executionApi.listItems({ page_size: 100 }),
   });
 
   // 筛选（spec 4 §4.6）

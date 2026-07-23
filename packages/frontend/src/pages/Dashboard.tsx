@@ -33,7 +33,7 @@ export function Dashboard() {
   });
   const { data: executions } = useQuery({
     queryKey: ["executions", { page_size: 10 }],
-    queryFn: () => executionApi.list({ page_size: 10 }),
+    queryFn: () => executionApi.listItems({ page_size: 10 }),
     refetchInterval: 5000,
   });
 

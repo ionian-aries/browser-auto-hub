@@ -18,7 +18,7 @@ export function Executions() {
   const [page, setPage] = useState(1);
 
   const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: pipelineApi.list });
-  const { data: executions, isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: [
       "executions",
       {
@@ -95,14 +95,14 @@ export function Executions() {
       </div>
 
       <Table
-        dataSource={executions}
+        dataSource={data?.items}
         rowKey="id"
         loading={isLoading}
         onRow={(record) => ({
           onClick: () => navigate(`/executions/${record.id}`),
           style: { cursor: "pointer" },
         })}
-        pagination={{ current: page, pageSize: 20, onChange: setPage }}
+        pagination={{ current: page, pageSize: 20, total: data?.total, onChange: setPage }}
         columns={[
           {
             title: "流水线",

@@ -33,7 +33,6 @@ def _empty_backfill_session():
 
 # ---------- B3: cancel 端点停止 runner task ----------
 
-
 @pytest.mark.asyncio
 async def test_cancel_endpoint_stops_runner_task(monkeypatch):
     stop = MagicMock(return_value=True)
@@ -104,3 +103,27 @@ async def test_sse_keepalive_keeps_stream_open(monkeypatch):
     # keepalive 必须是 SSE 注释行（前端不会渲染成伪日志），且流不因此关闭
     assert ": keepalive" in resp.text
     assert '"type": "complete"' in resp.text
+
+
+# ---------- 分页 total ----------
+
+
+@pytest.mark.asyncio
+async def test_list_executions_returns_total():
+    """列表接口必须返回 total（前端分页器需要），不再只返回裸数组。"""
+    items_result = MagicMock()
+    items_result.scalars.return_value.all.return_value = []
+
+    session = AsyncMock()
+    session.scalar.return_value = 42
+    session.execute.return_value = items_result
+
+    async with AsyncClient(
+        transport=ASGITransport(app=_make_app(session)), base_url="http://test"
+    ) as ac:
+        resp = await ac.get("/api/executions", params={"page": 2, "page_size": 20})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 42
+    assert body["items"] == []
