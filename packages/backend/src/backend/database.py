@@ -8,7 +8,8 @@ _engine = None
 _session_factory = None
 
 
-def _get_engine():
+def get_engine():
+    """进程级唯一 async engine（懒加载）。"""
     global _engine
     if _engine is None:
         settings = get_settings()
@@ -16,15 +17,16 @@ def _get_engine():
     return _engine
 
 
-def _get_session_factory():
+def get_session_factory():
+    """进程级唯一 session factory（与 get_engine 绑定，swap_engine 后随之更新）。"""
     global _session_factory
     if _session_factory is None:
-        _session_factory = async_sessionmaker(_get_engine(), expire_on_commit=False)
+        _session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     return _session_factory
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    factory = _get_session_factory()
+    factory = get_session_factory()
     async with factory() as session:
         yield session
 
