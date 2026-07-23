@@ -4,7 +4,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_merged_settings, get_settings, write_env_value
-from backend.database import _get_engine, get_session, swap_engine
+from backend.database import get_engine, get_session, swap_engine
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 
@@ -157,7 +157,7 @@ async def test_storage(session: AsyncSession = Depends(get_session)):
 @router.post("/db/test")
 async def test_db():
     try:
-        engine = _get_engine()
+        engine = get_engine()
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
         return {"status": "ok"}
