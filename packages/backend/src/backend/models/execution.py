@@ -28,7 +28,7 @@ class TaskExecution(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     result_summary: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, server_default=func.now()
+        UTCDateTime, server_default=func.utc_timestamp()
     )
 
     pipeline = relationship("Pipeline", back_populates="executions")
@@ -47,7 +47,7 @@ class TaskLog(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("task_executions.id"))
-    timestamp: Mapped[datetime] = mapped_column(UTCDateTimeFsp, server_default=func.now())
+    timestamp: Mapped[datetime] = mapped_column(UTCDateTimeFsp, server_default=func.utc_timestamp())
     level: Mapped[str] = mapped_column(
         Enum("info", "warn", "error", name="log_level"), default="info"
     )
@@ -69,7 +69,7 @@ class TaskArtifact(Base):
     content_type: Mapped[str] = mapped_column(String(100))
     size_bytes: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, server_default=func.now()
+        UTCDateTime, server_default=func.utc_timestamp()
     )
 
     execution = relationship("TaskExecution", back_populates="artifacts")

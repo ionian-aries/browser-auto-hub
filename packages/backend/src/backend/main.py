@@ -37,6 +37,25 @@ async def _ensure_columns(conn) -> None:
             text("ALTER TABLE schedules ADD COLUMN run_at DATETIME(6) NULL")
         )
 
+    # 时间戳默认值统一为 UTC 时钟（历史 func.now() 是服务器本地时区）
+    for stmt in _UTC_DEFAULT_MIGRATIONS:
+        try:
+            await conn.execute(text(stmt))
+        except Exception:
+            logger.warning("UTC 默认值迁移失败（可重试，不阻断启动）: %s", stmt, exc_info=True)
+
+
+_UTC_DEFAULT_MIGRATIONS = [
+    "ALTER TABLE task_executions MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
+    "ALTER TABLE task_logs MODIFY COLUMN `timestamp` DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
+    "ALTER TABLE task_artifacts MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
+    "ALTER TABLE pipelines MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
+    "ALTER TABLE pipelines MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP()) ON UPDATE UTC_TIMESTAMP()",
+    "ALTER TABLE schedules MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
+    "ALTER TABLE schedules MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP()) ON UPDATE UTC_TIMESTAMP()",
+    "ALTER TABLE system_settings MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP()) ON UPDATE UTC_TIMESTAMP()",
+]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
