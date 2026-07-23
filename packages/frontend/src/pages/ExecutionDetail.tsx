@@ -24,6 +24,7 @@ export function ExecutionDetail() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<string>("all");
   const [screenshots, setScreenshots] = useState<Record<string, string>>({});
+  const [sseDropped, setSseDropped] = useState<"retrying" | "failed" | false>(false);
   const logEndRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
   const stepColorMap = useRef(new Map<string, string>());
@@ -59,18 +60,48 @@ export function ExecutionDetail() {
     if (!id || !execution) return;
 
     if (execution.status === "running") {
-      const source = new EventSource(`/api/executions/${id}/logs/stream`);
-      source.onmessage = (event) => {
-        const entry = JSON.parse(event.data);
-        if (entry.type === "complete") {
-          source.close();
-          queryClient.invalidateQueries({ queryKey: ["execution", id] });
-          return;
-        }
-        setLogs((prev) => [...prev, entry]);
+      let source: EventSource | null = null;
+      let retryTimer: ReturnType<typeof setTimeout> | null = null;
+      let retries = 0;
+      let done = false;
+
+      const connect = () => {
+        source = new EventSource(`/api/executions/${id}/logs/stream`);
+        source.onmessage = (event) => {
+          const entry = JSON.parse(event.data);
+          if (entry.type === "complete") {
+            done = true;
+            source?.close();
+            setSseDropped(false);
+            queryClient.invalidateQueries({ queryKey: ["execution", id] });
+            return;
+          }
+          setLogs((prev) => [...prev, entry]);
+        };
+        source.onerror = () => {
+          // 关闭以阻止原生自动重连（原生重连会重新回放 backlog，导致日志重复）
+          source?.close();
+          if (done) return;
+          retries += 1;
+          if (retries <= 5) {
+            // 手动重连：后端会回放已落库日志，先清空避免重复
+            setLogs([]);
+            setSseDropped("retrying");
+            retryTimer = setTimeout(connect, 1000 * retries);
+          } else {
+            // 放弃重连：execution 轮询仍在走，状态翻为非 running 后会改走 getLogs 快照
+            setSseDropped("failed");
+          }
+        };
       };
-      return () => source.close();
+      connect();
+      return () => {
+        done = true;
+        if (retryTimer) clearTimeout(retryTimer);
+        source?.close();
+      };
     } else {
+      setSseDropped(false);
       executionApi.getLogs(id).then(setLogs);
     }
   }, [id, execution?.status]);
@@ -138,6 +169,8 @@ export function ExecutionDetail() {
             size="small"
             extra={
               <span>
+                {sseDropped === "retrying" && <Tag color="warning">连接中断，重连中…</Tag>}
+                {sseDropped === "failed" && <Tag color="error">日志连接已断开</Tag>}
                 {["all", "info", "warn", "error"].map((level) => (
                   <Tag
                     key={level}
