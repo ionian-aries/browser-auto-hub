@@ -418,7 +418,7 @@ async def _run_pipeline(config: dict, ctx: ExecutionContext) -> PipelineResult:
 
 # ── Pipeline 注册 ──
 @register_pipeline(
-    name="news.collector",
+    name="news_collector.collector",
     display_name="资讯采集",
     description="采集白名单信源的资讯列表，经粗筛/细筛后入素材库",
     trigger_modes=["cron", "api", "manual"],

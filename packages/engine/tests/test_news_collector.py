@@ -19,18 +19,18 @@ class TestNewsCollectorRegistration:
         """import 触发 @register_pipeline 注册。"""
         import engine.pipelines.news_collector.collector  # noqa: F401
 
-        p = PipelineRegistry.get("news.collector")
+        p = PipelineRegistry.get("news_collector.collector")
         assert p is not None
         assert p.metadata.display_name == "资讯采集"
         assert "cron" in p.metadata.trigger_modes
         assert "manual" in p.metadata.trigger_modes
 
     def test_pipeline_discover(self):
-        """PipelineRegistry.discover() 能自动发现 news.collector。"""
+        """PipelineRegistry.discover() 能自动发现 news_collector.collector。"""
         PipelineRegistry.discover()
-        p = PipelineRegistry.get("news.collector")
+        p = PipelineRegistry.get("news_collector.collector")
         assert p is not None
-        assert p.metadata.name == "news.collector"
+        assert p.metadata.name == "news_collector.collector"
 
 
 class TestNewsCollectorExecute:
