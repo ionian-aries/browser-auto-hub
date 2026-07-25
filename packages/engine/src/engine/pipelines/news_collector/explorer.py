@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from playwright.async_api import Page
 
-from .config_store import save_config, increment_explore_count
+from .config_store import save_source_config
 from .crawler import try_extract_items, try_extract_detail
 from .llm_client import call_llm_json
 
@@ -176,10 +175,9 @@ async def explore_list(
     page: Page,
     source_name: str,
     base_url: str,
-    db: Any,
     max_retries: int = 3,
 ) -> dict | None:
-    """探索列表页 DOM → LLM 生成 config → 验证 → 存 DB。
+    """探索列表页 DOM → LLM 生成 config → 验证 → 存文件。
 
     Returns: 可用的 config dict 或 None（失败）。
     """
@@ -210,9 +208,8 @@ async def explore_list(
 
         items = await try_extract_items(page, list_config)
         if items:
-            # 成功 → 存 DB
-            await save_config(db, source_name, base_url, config)
-            await increment_explore_count(db, base_url)
+            # 成功 → 存文件
+            save_source_config(source_name, base_url, config)
             return config
 
         repair_hint = (

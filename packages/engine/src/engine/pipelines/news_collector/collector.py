@@ -1,6 +1,6 @@
 """NewsCollectorPipeline — 7 Phase 主编排（spec §6）
 
-Phase 1: 信源遍历 & Config 解析 (load config from DB, resolve inheritance)
+Phase 1: 信源遍历 & Config 解析 (load config from file, resolve inheritance)
 Phase 2: 翻页采集 (crawl pages with pagination)
 Phase 3: URL 去重 (internal + DB dedup)
 Phase 4: 粗筛 (batch LLM screening)
@@ -23,7 +23,7 @@ from engine.context import ExecutionContext
 from engine.registry import register_pipeline
 
 from .config_schema import resolve_config
-from .config_store import load_config
+from .config_store import load_config_by_base_url
 from .crawler import go_next_page, try_extract_detail, try_extract_items
 from .explorer import explore_detail, explore_list
 from .screener import coarse_screen, fine_screen
@@ -100,7 +100,7 @@ async def _dedup_urls(db: Any, items: list[dict]) -> list[dict]:
         try:
             result = await db.execute(
                 text(
-                    f"SELECT link_url FROM documents "
+                    f"SELECT link_url FROM ganghang_materials "
                     f"WHERE link_url IN ({placeholders})"
                 ),
                 params,
@@ -114,13 +114,13 @@ async def _dedup_urls(db: Any, items: list[dict]) -> list[dict]:
 
 
 async def _insert_documents(db: Any, docs: list[dict]) -> int:
-    """批量 INSERT IGNORE INTO documents。返回实际插入数。"""
+    """批量 INSERT IGNORE INTO ganghang_materials。返回实际插入数。"""
     inserted = 0
     for doc in docs:
         try:
             await db.execute(
                 text(
-                    "INSERT IGNORE INTO documents "
+                    "INSERT IGNORE INTO ganghang_materials "
                     "(category, title, content, digest, insight, "
                     "link_url, doc_date, website_name, score, score_reason) "
                     "VALUES (:category, :title, :content, :digest, :insight, "
@@ -136,40 +136,6 @@ async def _insert_documents(db: Any, docs: list[dict]) -> int:
     except Exception:
         pass
     return inserted
-
-
-async def _write_crawl_log(
-    db: Any,
-    execution_id: str,
-    source_name: str,
-    entry_url: str,
-    page_number: int,
-    items_found: int,
-    status: str,
-    error_message: str | None = None,
-) -> None:
-    """写入采集日志到 news_crawl_log。"""
-    try:
-        await db.execute(
-            text(
-                "INSERT INTO news_crawl_log "
-                "(execution_id, source_name, entry_url, page_number, "
-                "items_found, status, error_message) "
-                "VALUES (:eid, :sn, :eu, :pn, :found, :st, :err)"
-            ),
-            {
-                "eid": execution_id,
-                "sn": source_name,
-                "eu": entry_url,
-                "pn": page_number,
-                "found": items_found,
-                "st": status,
-                "err": error_message,
-            },
-        )
-        await db.commit()
-    except Exception:
-        pass
 
 
 # ── 7 Phase 主流程 ──
@@ -221,8 +187,8 @@ async def _run_pipeline(config: dict, ctx: ExecutionContext) -> PipelineResult:
                 "phase1", f"信源: {source_name} ({len(entries)} 个入口)"
             )
 
-            # 加载 DB config
-            db_config = await load_config(ctx.db, base_url)
+            # 加载信源 config（文件存储）
+            db_config = load_config_by_base_url(base_url)
 
             for entry_idx, entry in enumerate(entries):
                 entry_name = entry.get("name", f"entry_{entry_idx}")
@@ -242,16 +208,6 @@ async def _run_pipeline(config: dict, ctx: ExecutionContext) -> PipelineResult:
                     await asyncio.sleep(3)
                 except Exception as e:
                     await ctx.logger.error("phase1", f"  页面加载失败: {e}")
-                    await _write_crawl_log(
-                        ctx.db,
-                        ctx.execution_id,
-                        source_name,
-                        entry_url,
-                        0,
-                        0,
-                        "error",
-                        str(e),
-                    )
                     stats["entries_skipped"] += 1
                     continue
 
@@ -273,7 +229,7 @@ async def _run_pipeline(config: dict, ctx: ExecutionContext) -> PipelineResult:
                         "explorer", f"  触发探索 Agent: {entry_name}"
                     )
                     new_config = await explore_list(
-                        page, source_name, base_url, ctx.db, explore_retries
+                        page, source_name, base_url, explore_retries
                     )
                     if new_config:
                         stats["explore_success"] += 1
@@ -288,16 +244,6 @@ async def _run_pipeline(config: dict, ctx: ExecutionContext) -> PipelineResult:
                         stats["explore_failed"] += 1
                         await ctx.logger.error(
                             "explorer", f"  探索失败，跳过: {entry_name}"
-                        )
-                        await _write_crawl_log(
-                            ctx.db,
-                            ctx.execution_id,
-                            source_name,
-                            entry_url,
-                            0,
-                            0,
-                            "skipped",
-                            "探索Agent失败",
                         )
                         stats["entries_skipped"] += 1
                         continue
@@ -329,14 +275,10 @@ async def _run_pipeline(config: dict, ctx: ExecutionContext) -> PipelineResult:
 
                     page_items.extend(new_items)
 
-                    await _write_crawl_log(
-                        ctx.db,
-                        ctx.execution_id,
-                        source_name,
-                        entry_url,
-                        page_num,
-                        len(new_items),
-                        "ok",
+                    await ctx.logger.step(
+                        "phase2",
+                        f"  {entry_name} 第{page_num + 1}页: "
+                        f"采集 {len(new_items)} 条",
                     )
 
                 # 日期范围过滤

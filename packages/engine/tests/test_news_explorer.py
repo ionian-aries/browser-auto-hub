@@ -1,3 +1,5 @@
+"""Explorer tests — file-based config store (no DB)."""
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from engine.pipelines.news_collector.explorer import explore_list, explore_detail
@@ -22,17 +24,15 @@ class TestExploreList:
         page.url = "https://example.com/news"
         page.evaluate = AsyncMock(return_value={"body": {}, "repeating_structures": [], "pagination_candidates": []})
 
-        db = AsyncMock()
-        db.execute = AsyncMock()
-        db.commit = AsyncMock()
-
         with patch("engine.pipelines.news_collector.explorer.call_llm_json",
                     new_callable=AsyncMock, return_value=generated_config), \
              patch("engine.pipelines.news_collector.explorer.try_extract_items",
-                    new_callable=AsyncMock, return_value=[{"title": "test", "date": "2026-06-01", "url": "/1"}]):
-            result = await explore_list(page, "测试源", "https://example.com", db, max_retries=3)
+                    new_callable=AsyncMock, return_value=[{"title": "test", "date": "2026-06-01", "url": "/1"}]), \
+             patch("engine.pipelines.news_collector.explorer.save_source_config") as mock_save:
+            result = await explore_list(page, "测试源", "https://example.com", max_retries=3)
             assert result is not None
             assert result["list"]["mode"] == "selectors"
+            mock_save.assert_called_once_with("测试源", "https://example.com", generated_config)
 
     @pytest.mark.asyncio
     async def test_explore_fails_after_retries(self):
@@ -41,49 +41,12 @@ class TestExploreList:
         page.url = "https://example.com/news"
         page.evaluate = AsyncMock(return_value={"body": {}, "repeating_structures": [], "pagination_candidates": []})
 
-        db = AsyncMock()
-        db.execute = AsyncMock()
-        db.commit = AsyncMock()
-
         with patch("engine.pipelines.news_collector.explorer.call_llm_json",
                     new_callable=AsyncMock, return_value={"list": {}, "pagination": None, "detail": {}}), \
              patch("engine.pipelines.news_collector.explorer.try_extract_items",
                     new_callable=AsyncMock, return_value=[]):
-            result = await explore_list(page, "测试源", "https://example.com", db, max_retries=2)
+            result = await explore_list(page, "测试源", "https://example.com", max_retries=2)
             assert result is None
-
-    @pytest.mark.asyncio
-    async def test_explore_saves_config_on_success(self):
-        """成功后调用 save_config 和 increment_explore_count"""
-        generated_config = {
-            "list": {"mode": "selectors", "fields": {
-                "container": "ul.news", "item": "li", "title": "a",
-                "link": "a", "link_attr": "href", "date": "span"
-            }},
-            "pagination": None,
-            "detail": {"mode": "selectors", "fields": {
-                "title": "h1", "content": "div.content", "date": "span.date", "source": "span.src"
-            }},
-        }
-
-        page = MagicMock()
-        page.url = "https://example.com/news"
-        page.evaluate = AsyncMock(return_value={"body": {}, "repeating_structures": [], "pagination_candidates": []})
-
-        db = AsyncMock()
-
-        with patch("engine.pipelines.news_collector.explorer.call_llm_json",
-                    new_callable=AsyncMock, return_value=generated_config), \
-             patch("engine.pipelines.news_collector.explorer.try_extract_items",
-                    new_callable=AsyncMock, return_value=[{"title": "test", "date": "2026-06-01", "url": "/1"}]) as mock_extract, \
-             patch("engine.pipelines.news_collector.explorer.save_config",
-                    new_callable=AsyncMock) as mock_save, \
-             patch("engine.pipelines.news_collector.explorer.increment_explore_count",
-                    new_callable=AsyncMock) as mock_incr:
-            result = await explore_list(page, "测试源", "https://example.com", db, max_retries=3)
-            assert result is not None
-            mock_save.assert_awaited_once_with(db, "测试源", "https://example.com", generated_config)
-            mock_incr.assert_awaited_once_with(db, "https://example.com")
 
     @pytest.mark.asyncio
     async def test_explore_retries_on_llm_parse_error(self):
@@ -103,18 +66,13 @@ class TestExploreList:
         page.url = "https://example.com/news"
         page.evaluate = AsyncMock(return_value={"body": {}, "repeating_structures": [], "pagination_candidates": []})
 
-        db = AsyncMock()
-
         with patch("engine.pipelines.news_collector.explorer.call_llm_json",
                     new_callable=AsyncMock,
                     side_effect=[ValueError("bad json"), good_config]), \
              patch("engine.pipelines.news_collector.explorer.try_extract_items",
                     new_callable=AsyncMock, return_value=[{"title": "t", "date": "2026-06-01", "url": "/1"}]), \
-             patch("engine.pipelines.news_collector.explorer.save_config",
-                    new_callable=AsyncMock), \
-             patch("engine.pipelines.news_collector.explorer.increment_explore_count",
-                    new_callable=AsyncMock):
-            result = await explore_list(page, "测试源", "https://example.com", db, max_retries=3)
+             patch("engine.pipelines.news_collector.explorer.save_source_config"):
+            result = await explore_list(page, "测试源", "https://example.com", max_retries=3)
             assert result is not None
 
 
