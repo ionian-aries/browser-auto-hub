@@ -13,6 +13,7 @@ class PipelineResponse(BaseModel):
     max_concurrent: int
     timeout_seconds: int
     status: str
+    version: str = "1.0.0"
     created_at: datetime
     updated_at: datetime
 

@@ -22,6 +22,8 @@ class TaskExecution(Base):
         default="pending",
     )
     config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # 触发时 pipeline 版本快照（spec 1 §4.5）：历史执行可溯「当时跑的是哪版」
+    pipeline_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)

@@ -20,6 +20,9 @@ class SchedulerManager:
 
     async def start(self) -> None:
         await self._scheduler.__aenter__()
+        # APScheduler 4：__aenter__ 只初始化服务，必须显式启动调度循环，
+        # 否则 add_schedule 静默成功但永不触发
+        await self._scheduler.start_in_background()
         # System cleanup job always runs regardless of pause state.
         await self._scheduler.add_schedule(
             self._cleanup_old_executions,
@@ -189,6 +192,7 @@ class SchedulerManager:
                 trigger_type="scheduled",
                 status="pending",
                 config=schedule.config_override,
+                pipeline_version=pipeline.version,  # 触发时版本快照（spec 1 §4.5）
             )
             session.add(execution)
             await session.commit()

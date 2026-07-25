@@ -9,12 +9,17 @@ class FakePage:
     pass
 
 
+class FakeContext:
+    async def new_page(self):
+        return FakePage()
+
+
 class FakeBrowser:
     def __init__(self):
         self.closed = False
 
-    async def new_page(self):
-        return FakePage()
+    async def new_context(self):
+        return FakeContext()
 
     async def close(self):
         self.closed = True
@@ -33,17 +38,20 @@ class FakeChromium:
 class FakePw:
     def __init__(self, browser):
         self.chromium = FakeChromium(browser)
+        self.stopped = False
+
+    async def stop(self):
+        self.stopped = True
 
 
 class FakePwCM:
+    """Mock async_playwright()：实现 start()/stop() 契约（oa_browser 不再用作上下文管理器）。"""
+
     def __init__(self, pw):
         self._pw = pw
 
-    async def __aenter__(self):
+    async def start(self):
         return self._pw
-
-    async def __aexit__(self, *args):
-        return False
 
 
 def _patch(monkeypatch, browser):

@@ -39,6 +39,7 @@ _FIELDS = {
     display_name="OA 沟通批量转发",
     description="共用一次登录，按 forwards 列表逐条转发沟通待办并回写 fwd=1",
     trigger_modes=["api", "manual"],
+    version="1.1.4",
     config_schema={
         "type": "object",
         "properties": {
@@ -48,10 +49,19 @@ _FIELDS = {
                 "description": "OA 登录页地址",
             },
             "username": {"type": "string", "description": "OA 用户名"},
-            "password": {"type": "string", "description": "OA 密码"},
+            "password": {"type": "string", "format": "password", "description": "OA 密码"},
             "forwards": {
                 "type": "array",
                 "description": "转发任务列表",
+                "default": [
+                    {
+                        "task_id": "19f7fa590e4d644a234b8264566b1ca7",
+                        "recipients": ["测试用账号3"],
+                        "cc_recipients": ["测试用账号9", "测试用账号10"],
+                        "title": None,
+                        "urgent": False,
+                    }
+                ],
                 "items": {
                     "type": "object",
                     "properties": {
@@ -68,7 +78,7 @@ _FIELDS = {
                         },
                         "title": {
                             "type": "string",
-                            "description": "覆盖标题，缺省保留原标题",
+                            "description": "覆盖标题；null 或缺省 = 保留原标题；空字符串 = 显式清空标题",
                         },
                         "urgent": {
                             "type": "boolean",
@@ -119,36 +129,48 @@ class OaCommunicateForwardPipeline(BasePipeline):
             try:
                 await ctx.logger.step("login", "登录 OA 系统")
                 await oa_login(page, config)
+                await ctx.logger.step("login", "登录成功，已进入门户页")
             except (LoginError, LoginTimeout) as e:
                 await ctx.logger.error("login", str(e))
                 return PipelineResult(success=False, error=str(e))
 
-            for item in forwards:
+            await ctx.logger.step("prepare", f"共 {len(forwards)} 条转发任务，逐条处理")
+
+            for idx, item in enumerate(forwards, start=1):
                 task_id = item["task_id"]
-                step = f"forward[{task_id}]"
+                step = f"forward[{task_id[:8]}]"
+                progress = f"第 {idx}/{len(forwards)} 条"
                 try:
                     status = await self._check_pending(ctx, task_id)
                     if status == "missing":
                         raise RuntimeError("DB 中不存在该 task_id（未采集？）")
                     if status == "forwarded":
                         stats["skipped"] += 1
-                        await ctx.logger.step(step, "该记录已转发，跳过")
+                        await ctx.logger.step(step, f"{progress}：该记录已转发，跳过（去重）")
                         continue
 
                     await self._goto_forward(page, task_id, config)
+                    await ctx.logger.step(step, f"{progress}：已打开转发页，开始填写表单")
                     await self._fill_form(page, item, config, ctx, step)
                     await self._submit_and_verify(page)
+                    await ctx.logger.step(step, f"{progress}：已提交，检测到成功文案")
                     result = await self._update_fwd(ctx, task_id)
                     await ctx.db.commit()  # 逐条独立提交：崩溃也不丢 fwd=1
                     stats["forwarded"] += 1
-                    await ctx.logger.step(step, f"转发成功 (db: {result})")
+                    await ctx.logger.step(step, f"{progress}：转发成功 (db: {result})")
                 except Exception as e:
                     stats["failed"] += 1
                     errors.append({"task_id": task_id, "error": str(e)})
                     screenshot = await self._safe_screenshot(page)
                     await ctx.logger.step(
-                        step, f"转发失败: {e}", level="error", screenshot=screenshot
+                        step, f"{progress}：转发失败: {e}", level="error", screenshot=screenshot
                     )
+
+            await ctx.logger.step(
+                "summary",
+                f"转发完成：成功 {stats['forwarded']} 条，跳过 {stats['skipped']} 条，"
+                f"失败 {stats['failed']} 条",
+            )
 
         summary = {**stats, "errors": errors}
         if stats["failed"] == 0:
@@ -221,15 +243,20 @@ class OaCommunicateForwardPipeline(BasePipeline):
         )
 
     async def _fill_form(self, page: Page, item: dict, config: dict, ctx, step: str) -> None:
-        # 标题：非空才覆盖，保留默认"转发:…"
-        if item.get("title"):
-            await page.locator("input[name=docSubject]").fill(item["title"])
+        # 标题三态语义（spec 5 §6）：null/缺省 = 保留原标题；空字符串 = 显式清空；非空 = 覆盖
+        title = item.get("title")
+        if title is None:
+            await ctx.logger.step(step, "标题：保留原标题")
+        else:
+            await page.locator("input[name=docSubject]").fill(title)
+            await ctx.logger.step(step, "标题：显式清空" if title == "" else f"标题：覆盖为「{title}」")
 
         checkbox = page.locator("input[name=_fdIsPriority]")
         if item.get("urgent"):
             await checkbox.check()
         else:
             await checkbox.uncheck()
+        await ctx.logger.step(step, f"紧急标记：{'是' if item.get('urgent') else '否'}")
 
         for person in item["recipients"]:
             await self._pick_one(page, "participant", person)

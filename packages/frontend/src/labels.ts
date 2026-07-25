@@ -29,10 +29,11 @@ export const triggerModeLabels: Record<string, string> = {
   manual: "手动",
 };
 
-// pipeline.status
+// pipeline.status（archived 不出现在列表，仅历史详情页兜底映射）
 export const pipelineStatusLabels: Record<string, string> = {
   active: "启用",
   disabled: "停用",
+  archived: "已归档",
 };
 
 // schedule.trigger_type

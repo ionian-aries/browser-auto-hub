@@ -10,15 +10,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { executionApi, pipelineApi } from "../api/client";
 import { statusColors, statusLabels, triggerLabels } from "../labels";
+import { durationSeconds, formatDuration } from "../utils/format";
 import type { Execution } from "../types";
-
-function formatDuration(startedAt: string | null): string {
-  if (!startedAt) return "-";
-  const seconds = Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
-}
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -135,7 +128,7 @@ export function Dashboard() {
                   <div style={{ fontWeight: "bold" }}>{exec.pipeline_display_name ?? exec.pipeline_name}</div>
                   <Tag color="processing">{triggerLabels[exec.trigger_type] ?? exec.trigger_type}</Tag>
                   <div style={{ marginTop: 8, color: "#666" }}>
-                    运行时长: {formatDuration(exec.started_at)}
+                    运行时长: {formatDuration(durationSeconds(exec.started_at, null) ?? 0)}
                   </div>
                 </Card>
               </Col>
@@ -161,7 +154,7 @@ export function Dashboard() {
                 <Tag color={statusColors[exec.status]}>{statusLabels[exec.status] ?? exec.status}</Tag>
                 {exec.finished_at && exec.started_at && (
                   <span style={{ color: "#999", marginLeft: 8 }}>
-                    耗时 {Math.floor((new Date(exec.finished_at).getTime() - new Date(exec.started_at).getTime()) / 1000)}s
+                    耗时 {formatDuration(durationSeconds(exec.started_at, exec.finished_at)!)}
                   </span>
                 )}
                 {exec.finished_at && (

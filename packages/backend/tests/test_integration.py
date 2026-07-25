@@ -45,6 +45,7 @@ async def test_create_dispatches_without_scheduler(monkeypatch):
     pipeline.name = "example"
     pipeline.display_name = "Example"
     pipeline.status = "active"
+    pipeline.version = "1.0.0"
 
     mock_result = MagicMock()
     mock_result.scalar_one_or_none.return_value = pipeline

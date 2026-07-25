@@ -44,3 +44,16 @@ def test_server_defaults_use_utc_clock():
         assert col.server_default is not None, f"{col} 缺 server_default"
         text = str(col.server_default.arg).lower()
         assert "utc_timestamp" in text, f"{col} 仍使用本地时区默认值: {text}"
+
+
+def test_today_start_is_local_midnight_in_utc():
+    """业务日按本地零点切割（spec 1 §14），转 UTC-naive 后与 UTC 存储比对。"""
+    from backend.api.executions import _local_today_start_utc_naive
+
+    start = _local_today_start_utc_naive()
+    assert start.tzinfo is None  # 与存储侧 naive UTC 可比
+    # 本地零点 ≡ UTC 当天的前一日 16:00（UTC+8）；本地当天任意时刻都应 >= start
+    now_utc_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    assert start <= now_utc_naive
+    # 切割点不得早于"本地昨天"：与 now 的差必然小于 24h（UTC 日切割则可能差近 32h 的语义错误）
+    assert (now_utc_naive - start).total_seconds() < 24 * 3600

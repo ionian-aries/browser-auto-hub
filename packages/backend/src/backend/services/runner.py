@@ -149,6 +149,7 @@ async def _schedule_retry(
     schedule_id = execution.schedule_id
     trigger_type = execution.trigger_type  # 保留原始触发方式
     config = execution.config
+    pipeline_version = execution.pipeline_version  # 重试沿用首次触发的版本快照
     retry_count = execution.retry_count + 1
 
     async def _retry_after_delay():
@@ -159,6 +160,7 @@ async def _schedule_retry(
                 schedule_id=schedule_id,
                 trigger_type=trigger_type,
                 config=config,
+                pipeline_version=pipeline_version,
                 retry_count=retry_count,
             )
             retry_session.add(retry_exec)

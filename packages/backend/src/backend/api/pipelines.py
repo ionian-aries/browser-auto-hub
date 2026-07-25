@@ -25,8 +25,13 @@ class PipelineUpdate(BaseModel):
 
 @router.get("", response_model=list[PipelineResponse])
 async def list_pipelines(session: AsyncSession = Depends(get_session)):
-    # 返回全部状态：停用项必须可见可管理（spec 4 §4.6）
-    result = await session.execute(select(Pipeline).order_by(Pipeline.name))
+    # 返回 active+disabled（停用项必须可见可管理，spec 4 §4.6）；
+    # 排除 archived（代码已删除的软归档，仅历史 join 用，spec 1 §4.5）
+    result = await session.execute(
+        select(Pipeline)
+        .where(Pipeline.status != "archived")
+        .order_by(Pipeline.name)
+    )
     return result.scalars().all()
 
 

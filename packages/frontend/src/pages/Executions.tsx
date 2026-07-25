@@ -5,6 +5,7 @@ import { useNavigate, Link } from "react-router-dom";
 import type { Dayjs } from "dayjs";
 import { executionApi, pipelineApi } from "../api/client";
 import { statusColors, statusLabels, triggerLabels } from "../labels";
+import { durationSeconds, formatDuration } from "../utils/format";
 import type { Execution } from "../types";
 
 const { RangePicker } = DatePicker;
@@ -131,10 +132,8 @@ export function Executions() {
           {
             title: "耗时",
             render: (_: unknown, r: Execution) => {
-              if (!r.started_at) return "-";
-              const end = r.finished_at ? new Date(r.finished_at).getTime() : Date.now();
-              const seconds = Math.floor((end - new Date(r.started_at).getTime()) / 1000);
-              return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+              const sec = durationSeconds(r.started_at, r.finished_at);
+              return sec === null ? "-" : formatDuration(sec);
             },
           },
           {

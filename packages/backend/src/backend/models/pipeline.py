@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Enum, Integer, JSON, String, Text, func
+from sqlalchemy import Enum, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base, UTCDateTime, generate_uuid
@@ -15,11 +15,13 @@ class Pipeline(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     trigger_modes: Mapped[dict] = mapped_column(JSON, default=list)
     config_schema: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    max_concurrent: Mapped[int] = mapped_column(Integer, default=1)
-    timeout_seconds: Mapped[int] = mapped_column(Integer, default=3600)
     status: Mapped[str] = mapped_column(
-        Enum("active", "disabled", name="pipeline_status"), default="active"
+        # archived：代码已删除的软归档（spec 1 §4.5）——列表隐藏/禁止触发/调度跳过/历史保留
+        Enum("active", "disabled", "archived", name="pipeline_status"), default="active"
     )
+    # 代码声明版本（register_pipeline version 参数），纯溯源标记；
+    # sync 按定义字段内容对比决定是否覆盖（spec 1 二十七次修订），不由 version 差异触发
+    version: Mapped[str] = mapped_column(String(50), default="1.0.0")
     created_at: Mapped[datetime] = mapped_column(
         UTCDateTime, server_default=func.utc_timestamp()
     )
@@ -31,8 +33,6 @@ class Pipeline(Base):
     executions = relationship("TaskExecution", back_populates="pipeline")
 
     def __init__(self, **kwargs):
-        kwargs.setdefault("max_concurrent", 1)
-        kwargs.setdefault("timeout_seconds", 3600)
         kwargs.setdefault("status", "active")
         kwargs.setdefault("description", "")
         kwargs.setdefault("trigger_modes", [])
