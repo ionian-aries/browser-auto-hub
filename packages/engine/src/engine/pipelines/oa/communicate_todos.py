@@ -1,9 +1,20 @@
-"""OA 沟通待办采集 Pipeline"""
+"""OA 沟通待办采集 Pipeline
 
+采集流程（spec 3 2026-07-24 修订三/四）：
+1. 主扫描：列表页直接从标题链接 href 提取 fdId 去重（不为已知条目开详情页），
+   未知条目记录 {task_id, href}；
+2. 详情：goto(href) 直达，免疫「新消息置顶」导致的列表位移；
+   concurrency（默认 1）控制同 context 并行标签页数（Semaphore 限流）；
+3. 复核：详情采集后重载列表完整重扫，有新条目则继续，最多 max_verify_rounds
+   轮熔断（默认 2），仍有流入则留待下次调度自愈。
+"""
+
+import asyncio
 import base64
 import json
 import re
 import time
+from urllib.parse import quote, urljoin
 
 from playwright.async_api import Page
 
@@ -15,6 +26,8 @@ from engine.registry import register_pipeline
 
 _TITLE_LINK_SELECTOR = 'a.lui_notify_alink[href*="sysNotifyTodo"]'
 _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
+# 复核轮次上限默认值：新消息流入速度超过扫描速度时熔断，剩余由下次调度自愈
+_MAX_VERIFY_ROUNDS = 2
 
 
 @register_pipeline(
@@ -22,35 +35,31 @@ _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
     display_name="OA 沟通待办采集",
     description="采集 OA 系统沟通待办列表，提取元数据与附件，写入 inbox_documents 表",
     trigger_modes=["cron", "api", "manual"],
+    version="1.0.0",
     config_schema={
         "type": "object",
         "properties": {
+            "username": {"type": "string", "description": "OA 用户名"},
+            "password": {"type": "string", "format": "password", "description": "OA 密码"},
             "login_url": {
                 "type": "string",
                 "default": "https://ioa.sd-port.net/login.jsp",
                 "description": "OA 登录页地址",
             },
-            "username": {"type": "string", "description": "OA 用户名"},
-            "password": {"type": "string", "description": "OA 密码"},
-            "page_load_timeout": {
-                "type": "integer",
-                "default": 15000,
-                "description": "页面加载超时(ms)",
-            },
-            "element_visible_timeout": {
-                "type": "integer",
-                "default": 5000,
-                "description": "元素可见超时(ms)",
-            },
-            "action_settle_timeout": {
-                "type": "integer",
-                "default": 500,
-                "description": "操作后稳定等待(ms)",
-            },
             "max_pages": {
                 "type": "integer",
                 "default": 100,
                 "description": "最大采集页数（防止死循环）",
+            },
+            "max_verify_rounds": {
+                "type": "integer",
+                "default": 2,
+                "description": "详情采集后列表级复核的最大轮数（抓采集期间新进消息；熔断防死循环）",
+            },
+            "concurrency": {
+                "type": "integer",
+                "default": 1,
+                "description": "详情页并发采集数（同一 context 内并行标签页上限；调大需评估 OA 限流）",
             },
         },
         "required": ["username", "password"],
@@ -59,24 +68,35 @@ _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
 class OaCommunicateTodosPipeline(BasePipeline):
     async def execute(self, config: dict, ctx: ExecutionContext) -> PipelineResult:
         config.setdefault("login_url", "https://ioa.sd-port.net/login.jsp")
+        # 运行设置类参数由 runner 三级覆盖链注入（系统设置打底）；setdefault 仅作直连兜底
         config.setdefault("page_load_timeout", 15000)
         config.setdefault("element_visible_timeout", 5000)
         config.setdefault("action_settle_timeout", 500)
         config.setdefault("max_pages", 100)
+        config.setdefault("max_verify_rounds", _MAX_VERIFY_ROUNDS)
+        config.setdefault("concurrency", 1)
 
         records: list[dict] = []
-        stats = {"total": 0, "inserted": 0, "skipped": 0, "attachment_failures": 0}
+        stats = {
+            "total": 0,
+            "inserted": 0,
+            "skipped": 0,
+            "attachment_failures": 0,
+            "extract_failures": 0,
+        }
 
         async with oa_browser(config) as page:
             try:
                 await ctx.logger.step("login", "登录 OA 系统")
                 await oa_login(page, config)
+                await ctx.logger.step("login", "登录成功，已进入门户页")
 
                 await ctx.logger.step("locate_list", "定位待办列表")
                 frame = await self._find_list_frame(page, config)
                 if frame is None:
                     await ctx.logger.step("locate_list", "未找到待办列表 iframe", level="error")
                     return PipelineResult(success=False, error="List iframe not found")
+                await ctx.logger.step("locate_list", "找到待办列表 iframe")
 
                 content = await frame.content()
                 if _EMPTY_TEXT in content:
@@ -87,36 +107,81 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 from sqlalchemy import text
                 result = await ctx.db.execute(text("SELECT task_id FROM inbox_documents"))
                 existing_ids = {row[0] for row in result.fetchall()}
+                await ctx.logger.step("load_existing", f"加载已有记录 {len(existing_ids)} 条用于去重")
 
-                max_pages = config["max_pages"]
-                page_num = 0
+                total_count = await self._get_total_count(frame)
+                if total_count is not None:
+                    await ctx.logger.step("crawl", f"待办总数：共 {total_count} 条")
+
+                # 主扫描：列表级去重，收集未知条目的 href（不开详情页）
+                pending = await self._scan_all_pages(
+                    frame, config, ctx, existing_ids, stats, count_skips=True
+                )
+
+                # 详情采集 + 复核熔断：复核发现新条目则继续，最多 max_verify_rounds 轮
+                verify_round = 0
+                max_verify_rounds = config["max_verify_rounds"]
+                # Semaphore 限流并行标签页；Lock 串行共享状态访问——步骤日志写库
+                # 与写记录共用同一 AsyncSession（不可并发），existing_ids 延迟去重的
+                # check-then-add 跨 await 有竞态（spec 3 2026-07-24 修订四）
+                semaphore = asyncio.Semaphore(max(1, config["concurrency"]))
+                shared_lock = asyncio.Lock()
                 while True:
-                    page_num += 1
-                    if page_num > max_pages:
-                        await ctx.logger.step("crawl", f"已达最大页数限制 ({max_pages})，停止采集")
-                        break
-                    await ctx.logger.step("crawl", f"采集第 {page_num} 页")
-
-                    links = frame.locator(_TITLE_LINK_SELECTOR)
-                    count = await links.count()
-
-                    for i in range(count):
-                        record = await self._process_one(
-                            frame, links, i, config, ctx, existing_ids, stats
+                    results = await asyncio.gather(*(
+                        self._open_detail(
+                            page, item, config, ctx, stats, existing_ids,
+                            semaphore, shared_lock,
                         )
-                        if record:
-                            records.append(record)
+                        for item in pending
+                    ))
+                    records.extend(r for r in results if r)
 
-                    if not await self._has_next_page(frame):
+                    if verify_round >= max_verify_rounds:
+                        if pending:
+                            await ctx.logger.step(
+                                "verify",
+                                f"复核已达 {max_verify_rounds} 轮上限，本轮仍有新消息流入，"
+                                "如有遗漏将由下次调度补采",
+                                level="warn",
+                            )
                         break
-                    await self._click_next_page(frame, config)
+
+                    verify_round += 1
+                    await ctx.logger.step(
+                        "verify", f"第 {verify_round} 轮复核：重载列表检查新进消息"
+                    )
+                    # 重载回第 1 页；frame 引用随页面失效，需重新定位
+                    await page.reload(wait_until="domcontentloaded")
+                    frame = await self._find_list_frame(page, config)
+                    if frame is None:
+                        await ctx.logger.step(
+                            "verify", "复核时未找到列表 iframe，结束复核", level="warn"
+                        )
+                        break
+                    pending = await self._scan_all_pages(
+                        frame, config, ctx, existing_ids, stats, count_skips=False
+                    )
+                    if not pending:
+                        await ctx.logger.step("verify", "复核无新条目，列表已稳定")
+                        break
+                    await ctx.logger.step(
+                        "verify", f"复核发现 {len(pending)} 条新条目，继续采集"
+                    )
 
                 if records:
-                    await ctx.logger.step("save", f"写入数据库 {len(records)} 条")
+                    # 日志必须在写库成功之后——先记日志后写库会在写库失败时留下
+                    # 「已写入」的假成功记录（2026-07-24 fwd 无默认值事件的教训）
                     await self._save_records(records, ctx)
                     stats["inserted"] = len(records)
+                    await ctx.logger.step("save", f"写入数据库 {len(records)} 条")
 
                 stats["total"] = stats["inserted"] + stats["skipped"]
+                await ctx.logger.step(
+                    "summary",
+                    f"采集完成：新增 {stats['inserted']} 条，跳过 {stats['skipped']} 条，"
+                    f"详情失败 {stats['extract_failures']} 条，"
+                    f"附件失败 {stats['attachment_failures']} 个",
+                )
 
             except (LoginError, LoginTimeout) as e:
                 await ctx.logger.error("login", str(e))
@@ -145,34 +210,135 @@ class OaCommunicateTodosPipeline(BasePipeline):
             await page.wait_for_timeout(500)
         return None
 
-    async def _process_one(self, frame, links, index, config, ctx, existing_ids, stats):
-        """打开详情页提取元数据，返回 record dict 或 None"""
-        page = frame.page
-        async with page.context.expect_page() as new_page_info:
-            await links.nth(index).click()
-        detail_page = await new_page_info.value
-        await detail_page.wait_for_load_state("domcontentloaded")
+    @staticmethod
+    def _extract_fd_id(text: str) -> str | None:
+        """从 href/URL 中提取 fdId（task_id），无则返回 None。"""
+        match = re.search(r"fdId=([a-f0-9]+)", text or "")
+        return match.group(1) if match else None
 
-        try:
-            url = detail_page.url
-            match = re.search(r"fdId=([a-f0-9]+)", url)
-            task_id = match.group(1) if match else ""
+    async def _scan_all_pages(
+        self, frame, config, ctx, existing_ids, stats, count_skips
+    ) -> list[dict]:
+        """列表级全量扫描：逐页读取标题链接 href 提取 fdId 去重（不开详情页）。
 
-            if not task_id:
-                stats["skipped"] += 1
+        返回未知条目 [{task_id, href}]；href 无 fdId 的个别条目 task_id 置 None，
+        延迟到详情页 URL 判定。count_skips=False（复核轮）时不重复累计 skipped。
+        """
+        pending: list[dict] = []
+        max_pages = config["max_pages"]
+        page_num = 0
+        unchanged_streak = 0
+        while True:
+            page_num += 1
+            if page_num > max_pages:
+                await ctx.logger.step(
+                    "crawl",
+                    f"已达最大页数限制 ({max_pages})，停止扫描",
+                    level="warn",
+                )
+                break
+
+            links = frame.locator(_TITLE_LINK_SELECTOR)
+            count = await links.count()
+            new_on_page = 0
+            for i in range(count):
+                href = await links.nth(i).get_attribute("href") or ""
+                task_id = self._extract_fd_id(href)
+                if task_id is not None:
+                    if task_id in existing_ids:
+                        if count_skips:
+                            stats["skipped"] += 1
+                        continue
+                    # 扫描期即登记，漂移导致的同一条目跨页重复出现只收集一次
+                    existing_ids.add(task_id)
+                pending.append(
+                    {"task_id": task_id, "href": urljoin(frame.url, href)}
+                )
+                new_on_page += 1
+            await ctx.logger.step(
+                "crawl", f"第 {page_num} 页共 {count} 条，新条目 {new_on_page} 条"
+            )
+
+            if not await self._has_next_page(frame):
+                await ctx.logger.step("pagination", "已到最后一页，列表扫描完成")
+                break
+            fp_before = await self._fingerprint(frame)
+            await self._click_next_page(frame, config)
+            fp_after = await self._fingerprint(frame)
+            if fp_before == fp_after:
+                unchanged_streak += 1
+                await ctx.logger.step(
+                    "pagination",
+                    f"翻页后列表未变化（指纹相同，连续 {unchanged_streak} 次）",
+                    level="warn",
+                )
+                if unchanged_streak >= 2:
+                    await ctx.logger.step(
+                        "pagination", "连续 2 次翻页未生效，终止扫描", level="warn"
+                    )
+                    break
+            else:
+                unchanged_streak = 0
+        return pending
+
+    async def _open_detail(
+        self, page: Page, item: dict, config, ctx, stats, existing_ids,
+        semaphore: asyncio.Semaphore, shared_lock: asyncio.Lock,
+    ) -> dict | None:
+        """goto(href) 直达详情页提取元数据；单条失败计数后继续，不中断执行。
+
+        semaphore 限制同 context 并行标签页数；shared_lock 串行日志写库
+        （共享 AsyncSession）与 existing_ids 延迟去重的 check-then-add。
+        """
+        async with semaphore:
+            detail = await page.context.new_page()
+            try:
+                await detail.goto(item["href"], wait_until="domcontentloaded")
+                task_id = item["task_id"]
+                if task_id is None:
+                    # href 无 fdId 的兜底：从落地 URL 提取并做延迟去重
+                    task_id = self._extract_fd_id(detail.url) or ""
+                    if not task_id:
+                        stats["extract_failures"] += 1
+                        async with shared_lock:
+                            await ctx.logger.step(
+                                "extract",
+                                f"详情页 URL 无 task_id，跳过：{item['href'][:80]}",
+                                level="warn",
+                            )
+                        return None
+                    async with shared_lock:
+                        if task_id in existing_ids:
+                            stats["skipped"] += 1
+                            await ctx.logger.step(
+                                "extract", f"{task_id[:8]} 已存在，跳过（延迟去重）"
+                            )
+                            return None
+                        existing_ids.add(task_id)
+
+                record = await self._extract_meta(
+                    detail, task_id, config, ctx, stats, shared_lock
+                )
+                async with shared_lock:
+                    await ctx.logger.step(
+                        "extract", f"{record['title'][:50]}（task_id={task_id[:8]}）"
+                    )
+                return record
+            except Exception as e:
+                stats["extract_failures"] += 1
+                async with shared_lock:
+                    await ctx.logger.error(
+                        "extract",
+                        f"详情采集失败：{item.get('task_id') or item['href'][:60]} - {e}",
+                    )
                 return None
+            finally:
+                await detail.close()
 
-            if task_id in existing_ids:
-                stats["skipped"] += 1
-                return None
-
-            record = await self._extract_meta(detail_page, task_id, config, ctx, stats)
-            existing_ids.add(task_id)
-            return record
-        finally:
-            await detail_page.close()
-
-    async def _extract_meta(self, page: Page, task_id: str, config, ctx, stats) -> dict:
+    async def _extract_meta(
+        self, page: Page, task_id: str, config, ctx, stats,
+        shared_lock: asyncio.Lock,
+    ) -> dict:
         """提取详情页全部元数据"""
         title = await page.title()
         title = re.sub(r"\s*-\s*工作沟通$", "", title)
@@ -209,7 +375,9 @@ class OaCommunicateTodosPipeline(BasePipeline):
         except Exception:
             pass
 
-        attachment_urls = await self._download_attachments(page, task_id, config, ctx, stats)
+        attachment_urls = await self._download_attachments(
+            page, task_id, config, ctx, stats, shared_lock
+        )
 
         return {
             "task_id": task_id,
@@ -232,8 +400,10 @@ class OaCommunicateTodosPipeline(BasePipeline):
         names = re.split(r"[,，、]", raw)
         return ",".join(n.strip() for n in names if n.strip())
 
-    async def _download_attachments(self, page, task_id, config, ctx, stats) -> list[dict]:
-        """通过页面内 fetch 下载附件并上传 MinIO"""
+    async def _download_attachments(
+        self, page, task_id, config, ctx, stats, shared_lock: asyncio.Lock
+    ) -> list[str]:
+        """通过页面内 fetch 下载附件并上传 MinIO，返回成功项的代理下载 URL 列表"""
         content = await page.content()
         attach_match = re.search(r"文档附件\((\d+)\)", content)
         if not attach_match or int(attach_match.group(1)) == 0:
@@ -252,6 +422,8 @@ class OaCommunicateTodosPipeline(BasePipeline):
 
         rows = page.locator(".work_comm_Content .upload_list_tr_view")
         count = await rows.count()
+        async with shared_lock:
+            await ctx.logger.step("attachment", f"检测到 {count} 个附件，开始下载上传")
 
         for i in range(count):
             row = rows.nth(i)
@@ -281,40 +453,77 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 )
 
                 file_bytes = base64.b64decode(b64_data)
-                object_key = f"{ctx.settings.minio_object_prefix}/attachments/{task_id}/{filename}"
+                # 前缀完全决定存储路径（spec 1 二十五次修订：删除硬编码 attachments 段）
+                object_key = f"{ctx.settings.minio_object_prefix}/{task_id}/{filename}"
                 ctx.minio.upload(object_key, file_bytes)
-                presign = ctx.minio.presign_url(object_key)
-                attachments.append({"filename": filename, "object_key": object_key, "url": presign, "ok": True})
+                # 平台代理下载地址（spec 1 二十三次修订：预签名退役，URL 永不过期）；
+                # safe="/" 保留 key 内路径分隔，中文文件名百分号编码
+                url = f"{ctx.settings.public_base_url}/api/files/{quote(object_key, safe='/')}"
+                # attachment_urls 仅收成功项的 URL 字符串（spec 3 2026-07-24 修订二）；
+                # 失败附件由 stats 计数 + 日志记录，不入数组
+                attachments.append(url)
+                async with shared_lock:
+                    await ctx.logger.step("attachment", f"附件已上传：{filename}")
             except Exception as e:
                 stats["attachment_failures"] += 1
-                attachments.append({"filename": filename, "url": "", "ok": False, "error": str(e)})
+                async with shared_lock:
+                    await ctx.logger.error("attachment", f"附件下载失败：{filename} - {e}")
 
         return attachments
 
+    async def _get_page_fraction(self, frame) -> tuple[int, int] | None:
+        """获取当前页/总页数，无分页组件返回 None。"""
+        cur = frame.locator("span.lui_paging_t_page_info_current")
+        total = frame.locator("span.lui_paging_t_page_info_total_page")
+        if await cur.count() == 0 or await total.count() == 0:
+            return None
+        cur_text = (await cur.first.inner_text()).strip()
+        total_text = (await total.first.inner_text()).strip()
+        if not cur_text.isdigit() or not total_text.isdigit():
+            return None
+        return int(cur_text), int(total_text)
+
     async def _has_next_page(self, frame) -> bool:
-        """判断是否有下一页（当前页/总页数）"""
-        result = await frame.evaluate("""() => {
-            const texts = document.body.innerText;
-            const match = texts.match(/(\\d+)\\/(\\d+)/);
-            if (!match) return false;
-            return parseInt(match[1]) < parseInt(match[2]);
-        }""")
-        return bool(result)
+        """当前页 < 总页数 且下一页按钮可用（末页时 hasnext 变为 notnext）。"""
+        frac = await self._get_page_fraction(frame)
+        if not frac:
+            return False
+        has_btn = await frame.locator("a.lui_paging_t_hasnext").count() > 0
+        return frac[0] < frac[1] and has_btn
 
     async def _click_next_page(self, frame, config):
-        await frame.evaluate("""() => {
-            const pager = document.querySelector('.lui_paging_mini, .lui_paging');
-            if (!pager) return;
-            const tds = pager.querySelectorAll('td');
-            for (let i = 0; i < tds.length; i++) {
-                if (tds[i].classList.contains('lui_paging_cur') || tds[i].querySelector('.lui_paging_cur')) {
-                    const next = tds[i+1];
-                    if (next) { const a = next.querySelector('a'); if (a) a.click(); }
-                    break;
-                }
-            }
-        }""")
+        btn = frame.locator("a.lui_paging_t_hasnext")
+        if await btn.count() == 0:
+            raise RuntimeError("下一页按钮不可用")
+        await btn.first.click()
+        # 等列表区域稳定：标题链接或空态文本出现
+        title_link = frame.locator(_TITLE_LINK_SELECTOR).first
+        empty = frame.get_by_text(_EMPTY_TEXT)
+        await title_link.or_(empty).wait_for(
+            state="visible", timeout=config["page_load_timeout"]
+        )
         await frame.page.wait_for_timeout(config["action_settle_timeout"])
+
+    async def _fingerprint(self, frame) -> str:
+        """页码 + 首末标题，用于检测翻页是否生效。"""
+        links = frame.locator(_TITLE_LINK_SELECTOR)
+        count = await links.count()
+        first = (await links.first.inner_text()).strip() if count else ""
+        last = (await links.nth(count - 1).inner_text()).strip() if count else ""
+        frac = await self._get_page_fraction(frame)
+        frac_str = f"{frac[0]}/{frac[1]}" if frac else ""
+        return f"{frac_str}|{first}|{last}"
+
+    async def _get_total_count(self, frame) -> int | None:
+        """从分页区域提取总条数（「共N条」）。"""
+        paging = frame.locator(".lui_paging_total_left")
+        scope = paging if await paging.count() > 0 else frame
+        locator = scope.get_by_text(re.compile(r"共\s*\d+\s*条"))
+        if await locator.count() == 0:
+            return None
+        text = await locator.first.inner_text()
+        m = re.search(r"共\s*(\d+)\s*条", text)
+        return int(m.group(1)) if m else None
 
     async def _save_records(self, records: list[dict], ctx: ExecutionContext):
         """批量写入 inbox_documents（raw SQL，engine 不可导入 backend models）"""

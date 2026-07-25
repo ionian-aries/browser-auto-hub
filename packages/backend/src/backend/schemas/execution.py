@@ -18,6 +18,7 @@ class ExecutionResponse(BaseModel):
     trigger_type: str
     status: str
     config: dict | None = None
+    pipeline_version: str | None = None  # 触发时版本快照
     retry_count: int = 0
     started_at: datetime | None = None
     finished_at: datetime | None = None

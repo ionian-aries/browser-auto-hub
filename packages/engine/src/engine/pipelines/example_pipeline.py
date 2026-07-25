@@ -8,6 +8,7 @@ from engine.registry import register_pipeline
     display_name="Example Pipeline",
     description="A minimal example pipeline for testing",
     trigger_modes=["manual", "api"],
+    version="1.0.0",
     config_schema={
         "type": "object",
         "properties": {

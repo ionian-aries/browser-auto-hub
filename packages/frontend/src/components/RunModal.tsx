@@ -4,7 +4,7 @@ import dayjs, { Dayjs } from "dayjs";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { executionApi, pipelineApi, scheduleApi, systemApi } from "../api/client";
-import { SchemaFields } from "./SchemaFields";
+import { isJsonField, SchemaFields } from "./SchemaFields";
 import type { Pipeline, Schedule } from "../types";
 
 type CronPreset = "daily" | "weekday" | "weekly" | "monthly" | "custom";
@@ -73,6 +73,40 @@ const hintStyle: React.CSSProperties = {
   overflow: "hidden",
 };
 
+type SchemaShape = {
+  properties?: Record<string, { type?: string; format?: string; items?: { type?: string }; default?: unknown; description?: string }>;
+  required?: string[];
+} | null;
+
+/** 提交前：复杂 array/object 字段的 JSON 文本解析回原生类型；空文本的可选字段剔除（spec 4 §4.4）。
+ *  array<string> 由 tags Select 原生提交，不在此列。 */
+function parseJsonFields(config: Record<string, unknown>, schema: SchemaShape): Record<string, unknown> {
+  const out = { ...config };
+  for (const [key, prop] of Object.entries(schema?.properties ?? {})) {
+    if (!isJsonField(prop)) continue;
+    const v = out[key];
+    if (v == null || (typeof v === "string" && v.trim() === "")) {
+      delete out[key];
+    } else if (typeof v === "string") {
+      out[key] = JSON.parse(v); // rules 已保证合法 JSON
+    }
+  }
+  return out;
+}
+
+/** 编辑回显：复杂 array/object 字段的原生值序列化为 JSON 文本填回 TextArea */
+function stringifyJsonFields(config: Record<string, unknown>, schema: SchemaShape): Record<string, unknown> {
+  const out = { ...config };
+  for (const [key, prop] of Object.entries(schema?.properties ?? {})) {
+    if (!isJsonField(prop)) continue;
+    const v = out[key];
+    if (v != null && typeof v !== "string") {
+      out[key] = JSON.stringify(v, null, 2);
+    }
+  }
+  return out;
+}
+
 export interface RunModalProps {
   open: boolean;
   onClose: () => void;
@@ -109,14 +143,11 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
     fixedPipeline ??
     pipelines?.find((p) => p.name === pipelineName) ??
     null;
-  const schema = pipeline?.config_schema as {
-    properties?: Record<string, { type?: string; default?: unknown; description?: string }>;
-    required?: string[];
-  } | null;
+  const schema = pipeline?.config_schema as SchemaShape;
 
   const runMutation = useMutation({
     mutationFn: (values: Record<string, unknown>) => {
-      const config = (values.config as Record<string, unknown>) ?? {};
+      const config = parseJsonFields((values.config as Record<string, unknown>) ?? {}, schema);
       if (values.exec_mode === "now") {
         return executionApi
           .create({ pipeline: values.pipeline_name as string, config, trigger_type: "manual" })
@@ -184,13 +215,15 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
   let initialValues: Record<string, unknown>;
   if (isEdit && editSchedule) {
     const editCron = parseCron(editSchedule.cron_expr);
+    const editSchema = (pipelines.find((p) => p.name === editSchedule.pipeline_name)?.config_schema ?? null) as SchemaShape;
     initialValues = {
       pipeline_name: editSchedule.pipeline_name,
       exec_mode: "schedule",
       config: {
         headless: settings.run_headless,
         close_browser: settings.run_close_browser,
-        ...(editSchedule.config_override ?? {}),
+        // array/object 字段需序列化为 JSON 文本回显（spec 4 §4.4）
+        ...stringifyJsonFields(editSchedule.config_override ?? {}, editSchema),
       },
       name: editSchedule.name,
       trigger_type: editSchedule.trigger_type,

@@ -26,17 +26,31 @@ async def _ensure_columns(conn) -> None:
     """Lightweight column migration: create_all won't ALTER existing tables."""
     from sqlalchemy import text
 
-    result = await conn.execute(
+    # (table, column, DDL) — 列不存在时补齐
+    add_column_migrations = [
+        ("schedules", "run_at", "ALTER TABLE schedules ADD COLUMN run_at DATETIME(6) NULL"),
+        ("pipelines", "version", "ALTER TABLE pipelines ADD COLUMN version VARCHAR(50) NOT NULL DEFAULT '1.0.0'"),
+        ("task_executions", "pipeline_version", "ALTER TABLE task_executions ADD COLUMN pipeline_version VARCHAR(50) NULL"),
+    ]
+    for table, column, ddl in add_column_migrations:
+        result = await conn.execute(
+            text(
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = DATABASE() AND table_name = :table "
+                "AND column_name = :column"
+            ),
+            {"table": table, "column": column},
+        )
+        if result.scalar_one() == 0:
+            await conn.execute(text(ddl))
+
+    # status 枚举扩展 archived（软归档，spec 1 §4.5）；幂等，每次启动执行
+    await conn.execute(
         text(
-            "SELECT COUNT(*) FROM information_schema.columns "
-            "WHERE table_schema = DATABASE() AND table_name = 'schedules' "
-            "AND column_name = 'run_at'"
+            "ALTER TABLE pipelines MODIFY COLUMN status "
+            "ENUM('active','disabled','archived') NOT NULL DEFAULT 'active'"
         )
     )
-    if result.scalar_one() == 0:
-        await conn.execute(
-            text("ALTER TABLE schedules ADD COLUMN run_at DATETIME(6) NULL")
-        )
 
     # 时间戳默认值统一为 UTC 时钟（历史 func.now() 是服务器本地时区）
     for stmt in _UTC_DEFAULT_MIGRATIONS:

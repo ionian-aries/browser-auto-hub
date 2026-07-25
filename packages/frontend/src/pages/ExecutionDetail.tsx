@@ -4,6 +4,7 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, fileApi } from "../api/client";
 import { statusColors, statusLabels, triggerLabels } from "../labels";
+import { durationSeconds, formatDuration } from "../utils/format";
 import type { Artifact, LogEntry } from "../types";
 
 const levelLabels: Record<string, string> = { all: "全部", info: "信息", warn: "警告", error: "错误" };
@@ -25,6 +26,8 @@ export function ExecutionDetail() {
   const [filter, setFilter] = useState<string>("all");
   const [screenshots, setScreenshots] = useState<Record<string, string>>({});
   const [sseDropped, setSseDropped] = useState<"retrying" | "failed" | false>(false);
+  // 耗时实时走秒：pending/running 期间本地 1s ticker（spec 4 §6.1）
+  const [now, setNow] = useState(() => Date.now());
   const logEndRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
   const stepColorMap = useRef(new Map<string, string>());
@@ -125,6 +128,13 @@ export function ExecutionDetail() {
     });
   }, [logs]);
 
+  // pending/running 期间每秒刷新耗时显示
+  useEffect(() => {
+    if (execution?.status !== "pending" && execution?.status !== "running") return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [execution?.status]);
+
   if (executionError) {
     return (
       <Result
@@ -138,18 +148,14 @@ export function ExecutionDetail() {
   if (!execution) return <div>加载中...</div>;
 
   const filteredLogs = filter === "all" ? logs : logs.filter((l) => l.level === filter);
-  const duration = execution.started_at
-    ? Math.floor(
-        ((execution.finished_at ? new Date(execution.finished_at).getTime() : Date.now()) -
-          new Date(execution.started_at).getTime()) /
-          1000
-      )
-    : 0;
+  const durationSec = durationSeconds(execution.started_at, execution.finished_at, now);
 
   return (
-    <div>
+    // 等高 100% 布局：占满视口可用高度（扣除 Content 与白卡双层 padding 各 24×2），
+    // 左右栏各自内部滚动，页面级滚动不参与（spec 4 §6.2）
+    <div style={{ height: "calc(100vh - 96px)", display: "flex", flexDirection: "column" }}>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16, flexShrink: 0 }}>
         <div>
           <h2 style={{ display: "inline" }}>
             <Link to={`/pipelines/${execution.pipeline_name}`}>
@@ -161,8 +167,9 @@ export function ExecutionDetail() {
           <div style={{ marginTop: 8 }}>
             <Tag color={statusColors[execution.status]}>{statusLabels[execution.status] ?? execution.status}</Tag>
             <Tag>{triggerLabels[execution.trigger_type] ?? execution.trigger_type}</Tag>
+            {execution.pipeline_version && <Tag>v{execution.pipeline_version}</Tag>}
             {execution.started_at && <span style={{ color: "#666" }}>{new Date(execution.started_at).toLocaleString("zh-CN", { hour12: false })}</span>}
-            {duration > 0 && <span style={{ color: "#666", marginLeft: 8 }}>耗时 {duration}s</span>}
+            {durationSec !== null && <span style={{ color: "#666", marginLeft: 8 }}>耗时 {formatDuration(durationSec)}</span>}
           </div>
         </div>
         {(execution.status === "pending" || execution.status === "running") && (
@@ -171,12 +178,14 @@ export function ExecutionDetail() {
       </div>
 
       {/* Main content: left/right split */}
-      <Row gutter={16}>
+      <Row gutter={16} style={{ flex: 1, minHeight: 0 }}>
         {/* Left: Log stream */}
-        <Col span={17}>
+        <Col span={17} style={{ height: "100%" }}>
           <Card
             title="执行日志"
             size="small"
+            style={{ height: "100%", display: "flex", flexDirection: "column" }}
+            styles={{ body: { flex: 1, minHeight: 0, padding: 0, display: "flex", flexDirection: "column" } }}
             extra={
               <span>
                 {sseDropped === "retrying" && <Tag color="warning">连接中断，重连中…</Tag>}
@@ -195,7 +204,7 @@ export function ExecutionDetail() {
             }
           >
             <div
-              style={{ height: 500, overflow: "auto", fontFamily: "monospace", fontSize: 12 }}
+              style={{ flex: 1, minHeight: 0, overflow: "auto", fontFamily: "monospace", fontSize: 12, padding: "8px 0" }}
               onScroll={(e) => {
                 const el = e.currentTarget;
                 userScrolledRef.current = el.scrollTop + el.clientHeight < el.scrollHeight - 50;
@@ -229,7 +238,8 @@ export function ExecutionDetail() {
         </Col>
 
         {/* Right: Info panel */}
-        <Col span={7}>
+        <Col span={7} style={{ height: "100%" }}>
+          <div style={{ height: "100%", overflow: "auto" }}>
           {execution.status === "success" && execution.result_summary && (
             <Card title="执行结果" size="small" style={{ marginBottom: 12 }}>
               <pre style={{ fontSize: 12, margin: 0 }}>
@@ -284,6 +294,7 @@ export function ExecutionDetail() {
               </Image.PreviewGroup>
             </Card>
           )}
+          </div>
         </Col>
       </Row>
     </div>

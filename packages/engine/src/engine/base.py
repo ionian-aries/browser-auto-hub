@@ -13,6 +13,9 @@ class PipelineMetadata:
     description: str
     trigger_modes: list[Literal["cron", "interval", "api", "manual"]]
     config_schema: dict | None = None
+    # 开发者自定义版本（建议 semver）。纯观测标记：sync 据此判断代码是否有更新，
+    # 执行记录快照此值用于追溯「当时跑的是哪版」。不做 pin——新执行永远跑最新代码。
+    version: str = "1.0.0"
 
 
 @dataclass

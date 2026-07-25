@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, pipelineApi, scheduleApi } from "../api/client";
 import { RunModal } from "../components/RunModal";
 import { pipelineStatusLabels, scheduleTypeLabels, statusColors, statusLabels, triggerLabels, triggerModeLabels } from "../labels";
+import { durationSeconds, formatDuration } from "../utils/format";
 import type { Pipeline, Schedule } from "../types";
 
 export function PipelineDetail() {
@@ -173,10 +174,8 @@ export function PipelineDetail() {
             {
               title: "耗时",
               render: (_: unknown, r: { started_at: string | null; finished_at: string | null }) => {
-                if (!r.started_at) return "-";
-                const end = r.finished_at ? new Date(r.finished_at).getTime() : Date.now();
-                const sec = Math.floor((end - new Date(r.started_at).getTime()) / 1000);
-                return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${sec % 60}s`;
+                const sec = durationSeconds(r.started_at, r.finished_at);
+                return sec === null ? "-" : formatDuration(sec);
               },
             },
             { title: "重试", dataIndex: "retry_count", render: (v: number) => v > 0 ? v : "-" },
@@ -190,7 +189,7 @@ export function PipelineDetail() {
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-        <h2>{pipeline.display_name} <Tag color={pipeline.status === "active" ? "success" : "default"}>{pipelineStatusLabels[pipeline.status] ?? pipeline.status}</Tag></h2>
+        <h2>{pipeline.display_name} <span style={{ fontSize: 13, color: "#999", fontWeight: "normal" }}>v{pipeline.version}</span> <Tag color={pipeline.status === "active" ? "success" : "default"}>{pipelineStatusLabels[pipeline.status] ?? pipeline.status}</Tag></h2>
         <Button type="primary" disabled={pipeline.status !== "active"} onClick={() => { setEditSchedule(null); setRunMode("now"); setRunOpen(true); }}>立即执行</Button>
       </div>
 

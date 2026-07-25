@@ -105,6 +105,9 @@ export function Pipelines() {
                 title={
                   <a onClick={() => navigate(`/pipelines/${p.name}`)}>
                     {p.display_name}
+                    <span style={{ fontSize: 12, color: "#999", marginLeft: 6, fontWeight: "normal" }}>
+                      v{p.version}
+                    </span>
                   </a>
                 }
                 extra={

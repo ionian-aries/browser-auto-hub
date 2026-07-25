@@ -8,6 +8,7 @@ export interface Pipeline {
   max_concurrent: number;
   timeout_seconds: number;
   status: string;
+  version: string;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +41,7 @@ export interface Execution {
   trigger_type: "scheduled" | "api" | "manual";
   status: "pending" | "running" | "success" | "failed" | "cancelled";
   config: Record<string, unknown> | null;
+  pipeline_version: string | null;
   retry_count: number;
   started_at: string | null;
   finished_at: string | null;

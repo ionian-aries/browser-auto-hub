@@ -41,6 +41,7 @@ async def create_execution(
         trigger_type=body.trigger_type,
         status="pending",
         config=body.config,
+        pipeline_version=pipeline.version,  # 触发时版本快照（spec 1 §4.5）
     )
     session.add(execution)
     await session.commit()
@@ -105,9 +106,17 @@ async def list_executions(
     return {"total": total, "items": out}
 
 
+def _local_today_start_utc_naive() -> datetime:
+    """本地零点（业务日切割，spec 1 §14）转 UTC-naive，与 UTC 存储比对。"""
+    local_midnight = datetime.now(timezone.utc).astimezone().replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return local_midnight.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 @router.get("/stats")
 async def execution_stats(session: AsyncSession = Depends(get_session)):
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = _local_today_start_utc_naive()
 
     today_count = await session.scalar(
         select(func.count()).select_from(TaskExecution).where(
