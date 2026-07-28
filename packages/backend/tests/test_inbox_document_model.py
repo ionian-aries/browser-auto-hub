@@ -28,7 +28,7 @@ def test_inbox_document_all_fields():
         participants="李四,王五",
         cc_recipients="赵六",
         summary="内容摘要",
-        attachment_urls='[{"filename":"a.pdf","url":"https://..."}]',
+        attachment_urls='["https://127.0.0.1:8900/api/files/attachments/xyz/a.pdf"]',
         fwd=1,
         skip=0,
         forward_time=None,

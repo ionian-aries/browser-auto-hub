@@ -1,4 +1,5 @@
 import { Col, Form, Input, InputNumber, Row, Select, Switch } from "antd";
+import { labelWithHint } from "./LabelHint";
 
 /** config_schema property 声明（spec 4 §4.4：渲染器完全由类型/format/enum 驱动） */
 interface SchemaProperty {
@@ -21,12 +22,10 @@ interface Props {
   } | null;
   /** 字段名前缀（嵌套路径），如 ["config_override"] 使值收集到 values.config_override 下 */
   namePrefix?: (string | number)[];
-  /** 默认值覆盖（三级覆盖链：全局运行设置优先于 schema default） */
-  defaults?: Record<string, unknown>;
   /** 双栏网格排布（spec 4 §8.1） */
   twoColumn?: boolean;
   /**
-   * 是否用 defaults/schema default seed 字段初始值。
+   * 是否用 schema default seed 字段初始值。
    * 编辑场景传 false：Form 层 initialValues 已带保存的配置，
    * Form.Item 级 initialValue 会覆盖并丢弃它们。
    */
@@ -39,17 +38,25 @@ export function isJsonField(prop: SchemaProperty): boolean {
   return prop.type === "array" && prop.items?.type !== "string";
 }
 
-const jsonHintStyle: React.CSSProperties = {
-  color: "#999",
-  fontSize: 12,
-  lineHeight: 1.5,
-};
+/**
+ * 展示排序（spec 4 §4.4）：凭据类字段优先——username 最前、password 其次，其余保持
+ * schema 声明顺序。注意 DB(MySQL JSON) 会按 key 长度+字典序重排 properties，
+ * schema 中的声明顺序无法可靠传到前端，故排序必须在前端做。
+ */
+function fieldRank(key: string): number {
+  const k = key.toLowerCase();
+  if (k.includes("username")) return 0;
+  if (k.includes("password")) return 1;
+  return 2;
+}
 
 /** 按 pipeline config_schema 动态渲染运行参数字段（执行配置页共用） */
-export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, seedDefaults = true }: Props) {
+export function SchemaFields({ schema, namePrefix = [], twoColumn, seedDefaults = true }: Props) {
   const properties = schema?.properties || {};
   const required = schema?.required || [];
-  const entries = Object.entries(properties);
+  const entries = Object.entries(properties).sort(
+    ([a], [b]) => fieldRank(a) - fieldRank(b)
+  );
   if (entries.length === 0) return null;
 
   const items = entries.map(([key, prop]) => {
@@ -57,7 +64,7 @@ export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, see
     const isBoolean = prop.type === "boolean";
     const isJson = isJsonField(prop);
     const label = prop.description || key;
-    const rawInitial = defaults && key in defaults ? defaults[key] : prop.default;
+    const rawInitial = prop.default;
     const initialValue =
       isJson && rawInitial != null && typeof rawInitial !== "string"
         ? JSON.stringify(rawInitial, null, 2)
@@ -114,11 +121,11 @@ export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, see
       control = <Input />;
     }
 
-    // JSON 编辑器 hint：JSON 不支持注释，从 items.properties 生成逐字段文档（spec 4 §4.4）
+    // JSON 编辑器说明：从 items.properties 生成逐字段文档，置于 label 后缀 tooltip（spec 4 §4.4/§8.1）
     const itemProps = prop.items?.properties;
     const itemRequired = prop.items?.required ?? [];
-    const jsonExtra = isJson ? (
-      <div style={jsonHintStyle}>
+    const jsonHint = isJson ? (
+      <div>
         <div>JSON 格式{prop.type === "array" ? "数组" : "对象"}，default 为结构示例</div>
         {itemProps &&
           Object.entries(itemProps).map(([k, p]) => (
@@ -134,11 +141,10 @@ export function SchemaFields({ schema, namePrefix = [], defaults, twoColumn, see
       <Form.Item
         key={key}
         name={[...namePrefix, key]}
-        label={label}
+        label={jsonHint ? labelWithHint(label, jsonHint) : label}
         {...(seedDefaults ? { initialValue } : {})}
         {...(isBoolean ? { valuePropName: "checked" } : {})}
         rules={rules}
-        {...(jsonExtra ? { extra: jsonExtra } : {})}
       >
         {control}
       </Form.Item>

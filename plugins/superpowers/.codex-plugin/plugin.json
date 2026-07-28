@@ -1,0 +1,18 @@
+{
+  "name": "superpowers",
+  "version": "0.1.0",
+  "description": "Superpowers plugin",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Superpowers",
+    "shortDescription": "Use Superpowers in Codex.",
+    "longDescription": "Superpowers adds a local Codex plugin scaffold.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Help me use Superpowers."
+  }
+}

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Col, Empty, Image, Result, Row, Tag, message } from "antd";
+import { Button, Card, Col, Empty, Result, Row, Tag, message } from "antd";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { executionApi, fileApi } from "../api/client";
+import { executionApi } from "../api/client";
 import { statusColors, statusLabels, triggerLabels } from "../labels";
 import { durationSeconds, formatDuration } from "../utils/format";
-import type { Artifact, LogEntry } from "../types";
+import type { LogEntry } from "../types";
 
 const levelLabels: Record<string, string> = { all: "全部", info: "信息", warn: "警告", error: "错误" };
 const levelColors: Record<string, string> = { info: "#1890ff", warn: "#faad14", error: "#ff4d4f" };
@@ -24,14 +24,12 @@ export function ExecutionDetail() {
   const queryClient = useQueryClient();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<string>("all");
-  const [screenshots, setScreenshots] = useState<Record<string, string>>({});
   const [sseDropped, setSseDropped] = useState<"retrying" | "failed" | false>(false);
   // 耗时实时走秒：pending/running 期间本地 1s ticker（spec 4 §6.1）
   const [now, setNow] = useState(() => Date.now());
   const logEndRef = useRef<HTMLDivElement>(null);
   const userScrolledRef = useRef(false);
   const stepColorMap = useRef(new Map<string, string>());
-  const loadedKeysRef = useRef(new Set<string>());
 
   const { data: execution, error: executionError } = useQuery({
     queryKey: ["execution", id],
@@ -43,11 +41,6 @@ export function ExecutionDetail() {
       const s = query.state.data?.status;
       return s === "pending" || s === "running" ? 3000 : false;
     },
-  });
-  const { data: artifacts } = useQuery({
-    queryKey: ["artifacts", id],
-    queryFn: () => executionApi.getArtifacts(id!),
-    enabled: !!id && execution?.status !== "running",
   });
 
   const cancelMutation = useMutation({
@@ -114,18 +107,6 @@ export function ExecutionDetail() {
     if (!userScrolledRef.current) {
       logEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
-  }, [logs]);
-
-  // Load screenshot URLs
-  useEffect(() => {
-    const keys = logs.filter((l) => l.screenshot_key).map((l) => l.screenshot_key!);
-    const newKeys = keys.filter((k) => !loadedKeysRef.current.has(k));
-    newKeys.forEach((key) => {
-      loadedKeysRef.current.add(key);
-      fileApi.presign(key).then(({ url }) => {
-        setScreenshots((prev) => ({ ...prev, [key]: url }));
-      });
-    });
   }, [logs]);
 
   // pending/running 期间每秒刷新耗时显示
@@ -269,29 +250,6 @@ export function ExecutionDetail() {
                   2
                 )}
               </pre>
-            </Card>
-          )}
-
-          {artifacts && artifacts.length > 0 && (
-            <Card title="产出文件" size="small" style={{ marginBottom: 12 }}>
-              {artifacts.map((a: Artifact) => (
-                <div key={a.id} style={{ marginBottom: 4 }}>
-                  <a href={a.download_url}>{a.file_name}</a>
-                  <span style={{ color: "#999", marginLeft: 8 }}>
-                    {(a.size_bytes / 1024).toFixed(1)} KB
-                  </span>
-                </div>
-              ))}
-            </Card>
-          )}
-
-          {Object.keys(screenshots).length > 0 && (
-            <Card title="截图" size="small">
-              <Image.PreviewGroup>
-                {Object.entries(screenshots).map(([key, url]) => (
-                  <Image key={key} src={url} width={100} style={{ marginRight: 8, marginBottom: 8 }} />
-                ))}
-              </Image.PreviewGroup>
             </Card>
           )}
           </div>

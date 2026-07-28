@@ -20,7 +20,6 @@ class Schedule(Base):
     run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     config_override: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     max_retries: Mapped[int] = mapped_column(Integer, default=0)
     retry_delay_seconds: Mapped[int] = mapped_column(Integer, default=60)
     created_at: Mapped[datetime] = mapped_column(

@@ -1,0 +1,14 @@
+.git
+.venv
+.pytest_cache
+.superpowers
+.claude
+node_modules
+**/node_modules
+**/dist
+docs
+*.md
+.env
+.env.*
+docker-compose.yml
+Makefile

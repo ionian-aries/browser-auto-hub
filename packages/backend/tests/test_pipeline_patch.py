@@ -5,9 +5,9 @@ from backend.api.pipelines import update_pipeline, PipelineUpdate
 
 
 def test_pipeline_update_schema():
+    """PATCH 仅允许 status（spec 1 二十次修订：max_concurrent/timeout_seconds 退役）。"""
     schema = PipelineUpdate.model_json_schema()
-    assert "max_concurrent" in schema["properties"]
-    assert "timeout_seconds" in schema["properties"]
+    assert set(schema["properties"]) == {"status"}
 
 
 def test_patch_endpoint_exists():

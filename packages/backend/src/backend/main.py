@@ -1,6 +1,4 @@
 from contextlib import asynccontextmanager
-import asyncio
-import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,92 +10,22 @@ from backend.api.schedules import router as schedules_router
 from backend.api.system import router as system_router
 from backend.config import get_settings
 from backend.database import get_engine, get_session_factory
-from backend.models import Base
 from backend.scheduler.manager import SchedulerManager
 from backend.services.pipeline_sync import sync_pipelines_to_db
-from backend.storage.minio_client import MinioStorage
 
 import backend.scheduler.manager as scheduler_mod
-
-logger = logging.getLogger(__name__)
-
-
-async def _ensure_columns(conn) -> None:
-    """Lightweight column migration: create_all won't ALTER existing tables."""
-    from sqlalchemy import text
-
-    # (table, column, DDL) — 列不存在时补齐
-    add_column_migrations = [
-        ("schedules", "run_at", "ALTER TABLE schedules ADD COLUMN run_at DATETIME(6) NULL"),
-        ("pipelines", "version", "ALTER TABLE pipelines ADD COLUMN version VARCHAR(50) NOT NULL DEFAULT '1.0.0'"),
-        ("task_executions", "pipeline_version", "ALTER TABLE task_executions ADD COLUMN pipeline_version VARCHAR(50) NULL"),
-    ]
-    for table, column, ddl in add_column_migrations:
-        result = await conn.execute(
-            text(
-                "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_schema = DATABASE() AND table_name = :table "
-                "AND column_name = :column"
-            ),
-            {"table": table, "column": column},
-        )
-        if result.scalar_one() == 0:
-            await conn.execute(text(ddl))
-
-    # status 枚举扩展 archived（软归档，spec 1 §4.5）；幂等，每次启动执行
-    await conn.execute(
-        text(
-            "ALTER TABLE pipelines MODIFY COLUMN status "
-            "ENUM('active','disabled','archived') NOT NULL DEFAULT 'active'"
-        )
-    )
-
-    # 时间戳默认值统一为 UTC 时钟（历史 func.now() 是服务器本地时区）
-    for stmt in _UTC_DEFAULT_MIGRATIONS:
-        try:
-            await conn.execute(text(stmt))
-        except Exception:
-            logger.warning("UTC 默认值迁移失败（可重试，不阻断启动）: %s", stmt, exc_info=True)
-
-
-_UTC_DEFAULT_MIGRATIONS = [
-    "ALTER TABLE task_executions MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
-    "ALTER TABLE task_logs MODIFY COLUMN `timestamp` DATETIME(6) NOT NULL DEFAULT (UTC_TIMESTAMP(6))",
-    "ALTER TABLE task_artifacts MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
-    "ALTER TABLE pipelines MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
-    "ALTER TABLE pipelines MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP()) ON UPDATE UTC_TIMESTAMP()",
-    "ALTER TABLE schedules MODIFY COLUMN created_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP())",
-    "ALTER TABLE schedules MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP()) ON UPDATE UTC_TIMESTAMP()",
-    "ALTER TABLE system_settings MODIFY COLUMN updated_at DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP()) ON UPDATE UTC_TIMESTAMP()",
-]
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 进程级唯一 engine（与 get_session 共用，shutdown 时统一 dispose）
+    # 十八次修订（spec 1）：基础设施只连不建——库表与 MinIO bucket 由部署方提前创建，
+    # 启动不做 create_all / 列迁移 / ensure_bucket，连接失败即报错。
     engine = get_engine()
-
-    # Create tables
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        await _ensure_columns(conn)
-
-    # Session factory
     session_factory = get_session_factory()
 
     # Sync pipeline registry to DB
     async with session_factory() as session:
         await sync_pipelines_to_db(session)
-
-    # MinIO bucket 启动就绪（boto3 同步调用放线程；失败仅告警，运行时才硬报错）
-    try:
-        async with session_factory() as session:
-            storage = await MinioStorage.create(session)
-        await asyncio.to_thread(storage.ensure_bucket)
-    except Exception:
-        logger.warning(
-            "MinIO bucket 初始化失败：截图/产物上传将在运行时报错", exc_info=True
-        )
 
     # Start scheduler
     scheduler = SchedulerManager(session_factory)

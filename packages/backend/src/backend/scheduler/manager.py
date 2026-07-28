@@ -7,7 +7,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.models.execution import TaskArtifact, TaskExecution, TaskLog
+from backend.models.execution import TaskExecution, TaskLog
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 
@@ -79,7 +79,7 @@ class SchedulerManager:
         return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
     async def _cleanup_old_executions(self) -> None:
-        """Delete executions (and their logs/artifacts) older than log_retention_days."""
+        """Delete executions (and their logs) older than log_retention_days."""
         async with self._session_factory() as session:
             days = await self._get_setting(session, "log_retention_days", "30")
             try:
@@ -91,15 +91,6 @@ class SchedulerManager:
             await session.execute(
                 delete(TaskLog).where(
                     TaskLog.execution_id.in_(
-                        select(TaskExecution.id).where(
-                            TaskExecution.created_at < cutoff
-                        )
-                    )
-                )
-            )
-            await session.execute(
-                delete(TaskArtifact).where(
-                    TaskArtifact.execution_id.in_(
                         select(TaskExecution.id).where(
                             TaskExecution.created_at < cutoff
                         )
@@ -158,7 +149,13 @@ class SchedulerManager:
                     day_of_week=parts[4],
                 )
         elif schedule.trigger_type == "interval" and schedule.interval_seconds:
-            return IntervalTrigger(seconds=schedule.interval_seconds)
+            # spec 1 二十四次修订：start_time 缺省=构造时刻且首次 next() 即返回它，
+            # 导致注册即触发（创建/重启 sync_all/启用/resume 都白跑一次）。
+            # 显式后移一个间隔：首次触发 = 注册后 interval_seconds。
+            start = datetime.now(timezone.utc).astimezone() + timedelta(
+                seconds=schedule.interval_seconds
+            )
+            return IntervalTrigger(seconds=schedule.interval_seconds, start_time=start)
         elif schedule.trigger_type == "once" and schedule.run_at:
             # run_at is stored UTC-naive; DateTrigger needs tz-aware local time
             run_time = schedule.run_at

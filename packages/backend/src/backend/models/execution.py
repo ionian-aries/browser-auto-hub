@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Enum, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import Enum, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.models.base import Base, UTCDateTime, UTCDateTimeFsp, generate_uuid
@@ -36,7 +36,6 @@ class TaskExecution(Base):
     pipeline = relationship("Pipeline", back_populates="executions")
     schedule = relationship("Schedule", back_populates="executions")
     logs = relationship("TaskLog", back_populates="execution")
-    artifacts = relationship("TaskArtifact", back_populates="execution")
 
     def __init__(self, **kwargs):
         kwargs.setdefault("status", "pending")
@@ -55,23 +54,5 @@ class TaskLog(Base):
     )
     step_name: Mapped[str] = mapped_column(String(100))
     message: Mapped[str] = mapped_column(Text)
-    screenshot_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
 
     execution = relationship("TaskExecution", back_populates="logs")
-
-
-class TaskArtifact(Base):
-    __tablename__ = "task_artifacts"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    execution_id: Mapped[str] = mapped_column(String(36), ForeignKey("task_executions.id"))
-    file_name: Mapped[str] = mapped_column(String(500))
-    minio_key: Mapped[str] = mapped_column(String(1000))
-    content_type: Mapped[str] = mapped_column(String(100))
-    size_bytes: Mapped[int] = mapped_column(BigInteger)
-    created_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, server_default=func.utc_timestamp()
-    )
-
-    execution = relationship("TaskExecution", back_populates="artifacts")

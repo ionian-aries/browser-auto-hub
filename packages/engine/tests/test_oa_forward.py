@@ -169,7 +169,7 @@ class FakeLogger:
     def __init__(self):
         self.entries = []
 
-    async def step(self, name, message, level="info", screenshot=None):
+    async def step(self, name, message, level="info"):
         self.entries.append((name, message, level))
 
     async def error(self, name, message):

@@ -25,7 +25,7 @@ def test_none_passthrough():
 
 def test_server_defaults_use_utc_clock():
     """DB 侧默认值必须是 UTC 时钟（func.now() 是服务器本地时区，与 UTCDateTime 读回语义冲突）。"""
-    from backend.models.execution import TaskArtifact, TaskExecution, TaskLog
+    from backend.models.execution import TaskExecution, TaskLog
     from backend.models.pipeline import Pipeline
     from backend.models.schedule import Schedule
     from backend.models.system_setting import SystemSetting
@@ -33,7 +33,6 @@ def test_server_defaults_use_utc_clock():
     cols = [
         TaskExecution.__table__.c.created_at,
         TaskLog.__table__.c.timestamp,
-        TaskArtifact.__table__.c.created_at,
         Pipeline.__table__.c.created_at,
         Pipeline.__table__.c.updated_at,
         Schedule.__table__.c.created_at,

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # 一键启动整个项目（后端 + 前端）
 # 基础设施（MySQL、MinIO）使用 .env 中配置的外部服务
-# 如需本地自建基础设施，请先运行: make dev-infra
 # Ctrl+C 统一停止所有服务
 set -e
 

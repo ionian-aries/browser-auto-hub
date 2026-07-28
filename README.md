@@ -6,7 +6,7 @@
 
 | 层 | 技术 |
 |----|------|
-| 前端 | React 18 + TypeScript + Vite + Ant Design 5 + Zustand |
+| 前端 | React 18 + TypeScript + Vite + Ant Design 5 + React Query |
 | 后端 | Python 3.11 + FastAPI + SQLAlchemy 2.0 + APScheduler 4 |
 | 引擎 | browser-use + playwright-cli + CloakBrowser |
 | 存储 | MySQL 8.0 + MinIO |
@@ -49,9 +49,6 @@ make dev
 # 或者分别启动（适合单独调试）
 make dev-backend    # 仅后端 (http://localhost:8900)
 make dev-frontend   # 仅前端 (http://localhost:3200)
-
-# 如果没有外部 MySQL/MinIO，可本地自建基础设施容器
-make dev-infra      # Docker 启动 MySQL + MinIO
 ```
 
 ### 4. 生产部署（全容器化）
@@ -60,8 +57,10 @@ make dev-infra      # Docker 启动 MySQL + MinIO
 make deploy
 # 前端: http://localhost:3200
 # 后端: http://localhost:8900
-# MinIO Console: http://localhost:9001
 ```
+
+> MySQL / MinIO 为外部已 provisioning 设施（库表与 bucket 提前创建），
+> compose 仅编排 backend + frontend；端口可用 .env 中 BACKEND_PORT / FRONTEND_PORT 覆盖。
 
 ## 开发命令
 
@@ -71,7 +70,7 @@ make test           # 运行全量测试
 make test-backend   # 仅后端测试
 make test-engine    # 仅引擎测试
 make build          # 构建 Docker 镜像
-make stop           # 停止基础设施容器
+make stop           # 停止 compose 服务
 make clean          # 清理构建产物
 ```
 
@@ -98,7 +97,7 @@ browser-auto-hub/
 │           ├── pages/      # 页面组件
 │           ├── components/ # 通用组件
 │           ├── api/        # API 客户端
-│           └── stores/     # Zustand 状态管理
+│           └── types/      # TypeScript 类型
 ├── scripts/            # 开发脚本 (dev.sh)
 ├── docker/             # Dockerfile + nginx.conf
 ├── docs/
@@ -122,11 +121,10 @@ browser-auto-hub/
 
 | 服务 | 端口 | 说明 |
 |------|------|------|
-| 后端 API | 8900 | FastAPI (uvicorn) |
-| 前端 Web | 3200 | Vite dev / Nginx prod |
-| MySQL | 3306 | 共用外部实例 |
-| MinIO API | 9000 | 对象存储 |
-| MinIO Console | 9001 | 管理面板 |
+| 后端 API | 8900 | FastAPI (uvicorn)，compose 部署可用 BACKEND_PORT 覆盖 |
+| 前端 Web | 3200 | Vite dev / Nginx prod，compose 部署可用 FRONTEND_PORT 覆盖 |
+| MySQL | 3306 | 外部实例（库表提前创建，应用仅连接） |
+| MinIO API | 9000 | 外部实例（bucket 提前创建，pipeline 业务附件） |
 
 端口选择避开了 himea-agent-infra 等同机部署项目的常用端口。
 

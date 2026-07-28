@@ -11,8 +11,6 @@ router = APIRouter(prefix="/api/pipelines", tags=["pipelines"])
 
 
 class PipelineUpdate(BaseModel):
-    max_concurrent: int | None = None
-    timeout_seconds: int | None = None
     status: str | None = None
 
     @field_validator("status")

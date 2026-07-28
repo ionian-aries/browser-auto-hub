@@ -44,6 +44,23 @@ def test_build_trigger_interval():
     assert trigger.next() is not None
 
 
+def test_interval_first_fire_after_one_interval():
+    """spec 1 二十四次修订：首次触发 = 注册后一个间隔，而非注册瞬间。
+
+    APScheduler 4 IntervalTrigger 的 start_time 缺省为构造时刻，首次 next()
+    返回 start_time 本身（注册即触发）；显式 start_time=now+interval 修正。
+    """
+    before = datetime.now(timezone.utc)
+    trigger = SchedulerManager._build_trigger(_schedule())  # interval_seconds=300
+    after = datetime.now(timezone.utc)
+
+    first = trigger.next().astimezone(timezone.utc)
+    assert before + timedelta(seconds=300) <= first <= after + timedelta(seconds=300)
+    # 第二次触发仍按间隔递增
+    second = trigger.next().astimezone(timezone.utc)
+    assert abs((second - first).total_seconds() - 300) < 1
+
+
 def test_build_trigger_once_converts_utc_naive_to_local_aware():
     """run_at 存 UTC-naive；DateTrigger 需 tz-aware 本地时间（spec 1 §14）。"""
     future = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1)

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -183,10 +184,15 @@ async def delete_schedule(
         await scheduler_manager.remove_schedule(schedule_id)
 
 
-@router.patch("/{schedule_id}/toggle", response_model=ScheduleResponse)
-async def toggle_schedule(
-    schedule_id: str, session: AsyncSession = Depends(get_session)
+class ScheduleEnabledUpdate(BaseModel):
+    enabled: bool
+
+
+@router.patch("/{schedule_id}", response_model=ScheduleResponse)
+async def set_schedule_enabled(
+    schedule_id: str, body: ScheduleEnabledUpdate, session: AsyncSession = Depends(get_session)
 ):
+    """显式启停：请求体携带目标态，重复调用结果一致（幂等，spec 1 二十二次修订）。"""
     result = await session.execute(
         select(Schedule)
         .options(selectinload(Schedule.pipeline))
@@ -195,7 +201,7 @@ async def toggle_schedule(
     schedule = result.scalar_one_or_none()
     if schedule is None:
         raise HTTPException(404, "Schedule not found")
-    schedule.enabled = not schedule.enabled
+    schedule.enabled = body.enabled
     await session.commit()
     await session.refresh(schedule)
 
