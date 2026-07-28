@@ -7,6 +7,19 @@
 """
 
 import os
+from pathlib import Path
+
+# 加载 .env 文件（如果存在），确保 TABLE_* 环境变量可用
+# 从 engine/table_names.py 向上 4 级到 repo root:
+# table_names.py -> engine/ -> src/ -> engine(pkg)/ -> packages/ -> repo_root
+_repo_root = Path(__file__).resolve().parents[4]
+_env_file = _repo_root / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file, override=False)  # override=False: 已有环境变量不覆盖
+    except ImportError:
+        pass  # python-dotenv 未安装时静默降级
 
 
 def resolve_table(logical_name: str, default: str) -> str:
