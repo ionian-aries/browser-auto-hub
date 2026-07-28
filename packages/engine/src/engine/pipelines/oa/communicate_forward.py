@@ -18,6 +18,9 @@ from engine.context import ExecutionContext
 from engine.pipelines.oa.shared.browser import oa_browser
 from engine.pipelines.oa.shared.login import LoginError, LoginTimeout, oa_login
 from engine.registry import register_pipeline
+from engine.table_names import resolve_table
+
+_INBOX_TABLE = resolve_table("inbox_documents", "inbox_documents")
 
 _OA_ORIGIN = "https://ioa.sd-port.net"
 _FORWARD_PATH = (
@@ -187,7 +190,7 @@ class OaCommunicateForwardPipeline(BasePipeline):
     async def _check_pending(ctx: ExecutionContext, task_id: str) -> str:
         """返回 'pending'（未转发）| 'forwarded' | 'missing'。实时查询，不预载。"""
         result = await ctx.db.execute(
-            text("SELECT fwd, forward_time FROM inbox_documents WHERE task_id = :task_id"),
+            text(f"SELECT fwd, forward_time FROM {_INBOX_TABLE} WHERE task_id = :task_id"),
             {"task_id": task_id},
         )
         row = result.fetchone()
@@ -206,7 +209,7 @@ class OaCommunicateForwardPipeline(BasePipeline):
             return status
         result = await ctx.db.execute(
             text(
-                "UPDATE inbox_documents SET fwd = 1, forward_time = :ts"
+                f"UPDATE {_INBOX_TABLE} SET fwd = 1, forward_time = :ts"
                 " WHERE task_id = :task_id"
                 " AND (fwd IS NULL OR fwd = 0) AND forward_time IS NULL"
             ),

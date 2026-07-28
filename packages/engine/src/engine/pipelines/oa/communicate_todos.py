@@ -23,6 +23,9 @@ from engine.context import ExecutionContext
 from engine.pipelines.oa.shared.login import LoginError, LoginTimeout, oa_login
 from engine.pipelines.oa.shared.browser import oa_browser
 from engine.registry import register_pipeline
+from engine.table_names import resolve_table
+
+_INBOX_TABLE = resolve_table("inbox_documents", "inbox_documents")
 
 _TITLE_LINK_SELECTOR = 'a.lui_notify_alink[href*="sysNotifyTodo"]'
 _EMPTY_TEXT = "当前模块所有工作都已经处理完成"
@@ -105,7 +108,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
 
                 # 加载已有 task_id 用于去重
                 from sqlalchemy import text
-                result = await ctx.db.execute(text("SELECT task_id FROM inbox_documents"))
+                result = await ctx.db.execute(text(f"SELECT task_id FROM {_INBOX_TABLE}"))
                 existing_ids = {row[0] for row in result.fetchall()}
                 await ctx.logger.step("load_existing", f"加载已有记录 {len(existing_ids)} 条用于去重")
 
@@ -526,13 +529,13 @@ class OaCommunicateTodosPipeline(BasePipeline):
         return int(m.group(1)) if m else None
 
     async def _save_records(self, records: list[dict], ctx: ExecutionContext):
-        """批量写入 inbox_documents（raw SQL，engine 不可导入 backend models）"""
+        """批量写入 inbox_documents（raw SQL，engine 不可导入 backend models；表名由 TABLE_ 环境变量配置）"""
         import uuid
 
         from sqlalchemy import text
 
-        insert_sql = text("""
-            INSERT INTO inbox_documents (id, task_id, creator, send_time, title, participants, cc_recipients, summary, attachment_urls)
+        insert_sql = text(f"""
+            INSERT INTO {_INBOX_TABLE} (id, task_id, creator, send_time, title, participants, cc_recipients, summary, attachment_urls)
             VALUES (:id, :task_id, :creator, :send_time, :title, :participants, :cc_recipients, :summary, :attachment_urls)
         """)
 
