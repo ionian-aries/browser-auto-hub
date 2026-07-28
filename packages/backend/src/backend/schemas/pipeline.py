@@ -10,8 +10,6 @@ class PipelineResponse(BaseModel):
     description: str
     trigger_modes: list[str]
     config_schema: dict | None = None
-    max_concurrent: int
-    timeout_seconds: int
     status: str
     version: str = "1.0.0"
     created_at: datetime

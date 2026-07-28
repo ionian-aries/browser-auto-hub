@@ -1,6 +1,5 @@
 import boto3
 from botocore.config import Config as BotoConfig
-from botocore.exceptions import ClientError
 
 from backend.config import get_settings
 
@@ -18,20 +17,15 @@ class MinioStorage:
             config=BotoConfig(signature_version="s3v4"),
         )
         self._bucket = settings.minio_bucket
-        self._presign_expires = settings.minio_presign_expires_seconds
 
     @classmethod
-    async def create(cls, session) -> "MinioStorage":
-        """Construct a MinioStorage using merged (.env + DB) settings."""
-        from backend.config import get_merged_settings
+    async def create(cls, session=None) -> "MinioStorage":
+        """构造 MinioStorage（配置唯一来源 `.env`，spec 1 十七次修订）。
 
-        return cls(settings=await get_merged_settings(session))
-
-    def ensure_bucket(self) -> None:
-        try:
-            self._client.head_bucket(Bucket=self._bucket)
-        except ClientError:
-            self._client.create_bucket(Bucket=self._bucket)
+        session 参数保留仅为兼容调用点签名，不参与配置解析。
+        bucket 由部署方提前创建（十八次修订），此处仅连接使用。
+        """
+        return cls(settings=get_settings())
 
     def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
         self._client.put_object(
@@ -42,17 +36,11 @@ class MinioStorage:
         )
         return key
 
-    def download(self, key: str) -> bytes:
-        response = self._client.get_object(Bucket=self._bucket, Key=key)
-        return response["Body"].read()
+    def get_object(self, key: str):
+        """取对象流，返回 (body, content_type)。NoSuchKey 抛 botocore ClientError。
 
-    def delete(self, key: str) -> None:
-        self._client.delete_object(Bucket=self._bucket, Key=key)
-
-    def presign_url(self, key: str, expires_in: int | None = None) -> str:
-        """Generate a presigned GET URL for the given object key."""
-        return self._client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": key},
-            ExpiresIn=expires_in or self._presign_expires,
-        )
+        body 为 botocore StreamingBody（read/close），由调用方负责关闭。
+        供 /api/files 代理下载使用（spec 1 二十三次修订，预签名链路已退役）。
+        """
+        resp = self._client.get_object(Bucket=self._bucket, Key=key)
+        return resp["Body"], resp.get("ContentType", "application/octet-stream")

@@ -1,7 +1,7 @@
 # Makefile for browser-auto-hub
 # 本地开发连接外部 MySQL/MinIO，后端前端本地运行
 
-.PHONY: help dev dev-infra dev-backend dev-frontend stop test test-backend test-engine build deploy install clean
+.PHONY: help dev dev-backend dev-frontend stop test test-backend test-engine build deploy install clean
 
 help: ## 显示帮助
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -11,20 +11,13 @@ help: ## 显示帮助
 dev: ## 一键启动项目（后端 + 前端，连接外部 MySQL/MinIO）
 	@./scripts/dev.sh
 
-dev-infra: ## 本地自建基础设施（仅当没有外部 MySQL/MinIO 时使用）
-	docker compose up -d mysql minio
-	@echo "等待 MySQL 就绪..."
-	@until docker compose exec mysql mysqladmin ping -h localhost --silent 2>/dev/null; do sleep 1; done
-	@echo "✓ MySQL 就绪"
-	@echo "✓ MinIO 就绪: http://localhost:9001 (minioadmin/minioadmin)"
-
 dev-backend: ## 仅启动后端（热重载，用于单独调试）
 	@./scripts/dev-backend.sh
 
 dev-frontend: ## 仅启动前端（热重载，用于单独调试）
 	@./scripts/dev-frontend.sh
 
-stop: ## 停止基础设施容器
+stop: ## 停止 compose 服务（backend/frontend）
 	docker compose down
 
 # === 测试 ===

@@ -41,21 +41,16 @@ def _execution(**overrides):
     e.pipeline = MagicMock()
     e.pipeline.name = "test.ok"
     e.pipeline.id = "p1"
-    e.pipeline.max_concurrent = 5
-    e.pipeline.timeout_seconds = 30
     for k, v in overrides.items():
         setattr(e, k, v)
     return e
 
 
-def _session(execution, concurrency=0, commit_side_effects=None):
+def _session(execution, commit_side_effects=None):
     """Main-session mock matching _run_execution's execute() call order."""
     s = AsyncMock()
     s.execute.side_effect = [
         _result(scalar_one_or_none=execution),  # select execution FOR UPDATE
-        _result(),  # select pipeline FOR UPDATE（并发检查串行化）
-        _result(scalar=concurrency),  # _check_concurrency
-        _result(scalars=[]),  # get_merged_settings
         _result(scalars=[]),  # _get_global_run_config
     ]
     if commit_side_effects is not None:
@@ -110,43 +105,6 @@ async def test_cancel_stops_running_task(_patched):
 @pytest.mark.asyncio
 async def test_cancel_unknown_execution_returns_false():
     assert runner.cancel_running_execution("no-such-id") is False
-
-
-# ---------- B4: busy 不再制造伪 failed ----------
-
-
-@pytest.mark.asyncio
-async def test_concurrency_check_locks_pipeline_row(_patched):
-    """TOCTOU：并发检查前必须 FOR UPDATE 锁 pipeline 行，串行化同 pipeline 的并发派发。"""
-    execution = _execution()
-    session = _session(execution)
-    factory = MagicMock(return_value=_SessionCM(session))
-
-    await runner._run_execution("exec-1", factory)
-
-    stmts = [c.args[0] for c in session.execute.call_args_list]
-    assert len(stmts) >= 2
-    lock_sql = str(stmts[1].compile(compile_kwargs={"literal_binds": True})).upper()
-    assert "PIPELINES" in lock_sql
-    assert "FOR UPDATE" in lock_sql
-
-
-@pytest.mark.asyncio
-async def test_busy_requeues_without_failing(_patched, monkeypatch):
-    monkeypatch.setattr(runner, "_BUSY_REDISPATCH_DELAY", 0)
-    redispatch = AsyncMock()
-    monkeypatch.setattr(runner, "dispatch_execution", redispatch)
-
-    execution = _execution()
-    session = _session(execution, concurrency=5)  # max_concurrent=5 → busy
-    factory = MagicMock(return_value=_SessionCM(session))
-
-    await runner._run_execution("exec-1", factory)
-    await asyncio.sleep(0.05)
-
-    assert execution.status != "failed"
-    session.rollback.assert_awaited()  # 释放行锁
-    redispatch.assert_awaited_with("exec-1", factory)
 
 
 # ---------- B4/N4: retry 语义 ----------

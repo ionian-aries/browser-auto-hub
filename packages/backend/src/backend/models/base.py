@@ -32,6 +32,8 @@ class UTCDateTimeFsp(UTCDateTime):
     """UTC-aware variant with microsecond precision (MySQL DATETIME(fsp=6))."""
 
     impl = MySQLDateTime(fsp=6)
+    # 子类覆盖 impl 后 cache_ok 不从父类继承，需显式声明（消除 SAWarning）
+    cache_ok = True
 
 
 class Base(DeclarativeBase):

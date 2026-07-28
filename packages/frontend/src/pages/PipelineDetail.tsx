@@ -1,19 +1,17 @@
 import { useState } from "react";
-import { Button, Card, Descriptions, InputNumber, Popconfirm, Result, Space, Switch, Table, Tabs, Tag, message } from "antd";
+import { Button, Card, Descriptions, Popconfirm, Result, Space, Switch, Table, Tabs, Tag } from "antd";
 import { useParams, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { executionApi, pipelineApi, scheduleApi } from "../api/client";
 import { RunModal } from "../components/RunModal";
 import { pipelineStatusLabels, scheduleTypeLabels, statusColors, statusLabels, triggerLabels, triggerModeLabels } from "../labels";
 import { durationSeconds, formatDuration } from "../utils/format";
-import type { Pipeline, Schedule } from "../types";
+import type { Execution, Pipeline, Schedule } from "../types";
 
 export function PipelineDetail() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [editConcurrent, setEditConcurrent] = useState<number | null>(null);
-  const [editTimeout, setEditTimeout] = useState<number | null>(null);
   const [runOpen, setRunOpen] = useState(false);
   const [runMode, setRunMode] = useState<"now" | "schedule">("now");
   const [editSchedule, setEditSchedule] = useState<Schedule | null>(null);
@@ -34,16 +32,8 @@ export function PipelineDetail() {
     enabled: !!name,
   });
 
-  const patchMutation = useMutation({
-    mutationFn: (data: { max_concurrent?: number; timeout_seconds?: number }) =>
-      pipelineApi.patch(name!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pipeline", name] });
-      message.success("保存成功");
-    },
-  });
-  const toggleMutation = useMutation({
-    mutationFn: (id: string) => scheduleApi.toggle(id),
+  const enabledMutation = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => scheduleApi.setEnabled(id, enabled),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["schedules"] }),
   });
   const deleteMutation = useMutation({
@@ -72,43 +62,11 @@ export function PipelineDetail() {
           <Card>
             <Descriptions bordered column={2}>
               <Descriptions.Item label="标识">{pipeline.name}</Descriptions.Item>
-              <Descriptions.Item label="状态"><Tag color={pipeline.status === "active" ? "success" : "default"}>{pipelineStatusLabels[pipeline.status] ?? pipeline.status}</Tag></Descriptions.Item>
+              <Descriptions.Item label="版本">v{pipeline.version}</Descriptions.Item>
               <Descriptions.Item label="描述" span={2}>{pipeline.description}</Descriptions.Item>
+              <Descriptions.Item label="状态"><Tag color={pipeline.status === "active" ? "success" : "default"}>{pipelineStatusLabels[pipeline.status] ?? pipeline.status}</Tag></Descriptions.Item>
               <Descriptions.Item label="触发方式">
                 {pipeline.trigger_modes.map((m) => <Tag key={m}>{triggerModeLabels[m] ?? m}</Tag>)}
-              </Descriptions.Item>
-              <Descriptions.Item label="最大并发">
-                <Space>
-                  <InputNumber
-                    min={1}
-                    value={editConcurrent ?? pipeline.max_concurrent}
-                    onChange={(v) => setEditConcurrent(v)}
-                    style={{ width: 80 }}
-                  />
-                  {editConcurrent !== null && editConcurrent !== pipeline.max_concurrent && (
-                    <Button size="small" type="primary" onClick={() => { patchMutation.mutate({ max_concurrent: editConcurrent! }); setEditConcurrent(null); }}>保存</Button>
-                  )}
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="执行超时">
-                <Space>
-                  <InputNumber
-                    min={60}
-                    value={editTimeout ?? pipeline.timeout_seconds}
-                    onChange={(v) => setEditTimeout(v)}
-                    style={{ width: 100 }}
-                    addonAfter="秒"
-                  />
-                  <span style={{ color: "#999" }}>
-                    ({Math.round((editTimeout ?? pipeline.timeout_seconds) / 60)} 分钟)
-                  </span>
-                  {editTimeout !== null && editTimeout !== pipeline.timeout_seconds && (
-                    <Button size="small" type="primary" onClick={() => { patchMutation.mutate({ timeout_seconds: editTimeout! }); setEditTimeout(null); }}>保存</Button>
-                  )}
-                </Space>
-              </Descriptions.Item>
-              <Descriptions.Item label="创建时间">
-                {new Date(pipeline.created_at).toLocaleString("zh-CN", { hour12: false })}
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -141,7 +99,7 @@ export function PipelineDetail() {
                   (r.interval_seconds ? `${r.interval_seconds}s` : null) ||
                   (r.run_at ? new Date(r.run_at).toLocaleString("zh-CN", { hour12: false }) : "-"),
               },
-              { title: "启用", render: (_, r: Schedule) => <Switch checked={r.enabled} onChange={() => toggleMutation.mutate(r.id)} /> },
+              { title: "启用", render: (_, r: Schedule) => <Switch checked={r.enabled} onChange={(checked) => enabledMutation.mutate({ id: r.id, enabled: checked })} /> },
               { title: "下次执行", dataIndex: "next_run_at", render: (v: string) => v ? new Date(v).toLocaleString("zh-CN", { hour12: false }) : "-" },
               {
                 title: "操作",
@@ -173,7 +131,7 @@ export function PipelineDetail() {
             { title: "开始时间", dataIndex: "started_at", render: (v: string) => v ? new Date(v).toLocaleString("zh-CN", { hour12: false }) : "-" },
             {
               title: "耗时",
-              render: (_: unknown, r: { started_at: string | null; finished_at: string | null }) => {
+              render: (_: unknown, r: Execution) => {
                 const sec = durationSeconds(r.started_at, r.finished_at);
                 return sec === null ? "-" : formatDuration(sec);
               },

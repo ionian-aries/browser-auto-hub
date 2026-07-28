@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -21,7 +21,6 @@ class PipelineMetadata:
 @dataclass
 class PipelineResult:
     success: bool
-    artifacts: list[dict] = field(default_factory=list)
     summary: dict | None = None
     error: str | None = None
 

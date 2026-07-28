@@ -61,7 +61,6 @@ async def test_sse_stream_backfills_existing_logs():
         level="info",
         step_name="login",
         message="登录成功",
-        screenshot_key=None,
     )
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [log]

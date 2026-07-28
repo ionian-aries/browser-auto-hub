@@ -41,9 +41,9 @@ Never change code in a way that contradicts the spec without updating the spec f
 - Monorepo: uv workspace (Python) + pnpm workspace (Node)
 - Backend: `packages/backend/` — FastAPI + SQLAlchemy + APScheduler
 - Engine: `packages/engine/` — browser-use + playwright-cli executors
-- Frontend: `packages/frontend/` — React + Vite + Ant Design + Zustand
+- Frontend: `packages/frontend/` — React + Vite + Ant Design + React Query
 - Infrastructure: `docker/` + `docker-compose.yml`
-- Config: `.env` + `config/` volume mount
+- Config: `.env`（infra 配置唯一来源；运行旋钮存 system_settings 表）
 
 ## Testing
 
@@ -58,7 +58,7 @@ cd packages/frontend && npx pnpm build
 ## Key Decisions
 
 - MySQL 8.0 with microsecond timestamp precision (DATETIME(fsp=6))
-- MinIO for object storage (screenshots, artifacts)
+- MinIO for pipeline business attachments（bucket 外部预创建，平台仅连接）
 - Pipeline registry via Python decorators + auto-discovery
 - SSE for real-time execution monitoring
 - Docker Compose for deployment

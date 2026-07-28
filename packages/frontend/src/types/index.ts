@@ -5,8 +5,6 @@ export interface Pipeline {
   description: string;
   trigger_modes: string[];
   config_schema: Record<string, unknown> | null;
-  max_concurrent: number;
-  timeout_seconds: number;
   status: string;
   version: string;
   created_at: string;
@@ -55,7 +53,6 @@ export interface LogEntry {
   level: "info" | "warn" | "error";
   step: string;
   message: string;
-  screenshot_key: string | null;
 }
 
 export interface ExecutionStats {
@@ -72,15 +69,8 @@ export interface SystemInfo {
 }
 
 export interface SystemSettings {
-  minio_endpoint: string;
-  minio_access_key: string;
-  minio_secret_key: string;
-  minio_bucket: string;
-  minio_object_prefix: string;
-  minio_presign_expires_seconds: number;
   log_retention_days: number;
   scheduler_enabled: boolean;
-  database_url: string;
   // 全局运行设置（三级覆盖链底层）
   run_headless: boolean;
   run_close_browser: boolean;
@@ -89,13 +79,4 @@ export interface SystemSettings {
   run_action_settle_timeout: number;
   run_default_max_retries: number;
   run_default_retry_delay_seconds: number;
-}
-
-export interface Artifact {
-  id: string;
-  file_name: string;
-  content_type: string;
-  size_bytes: number;
-  download_url: string;
-  created_at: string;
 }

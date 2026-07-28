@@ -1,54 +1,10 @@
-"""Enhanced runner tests — timeout, concurrency check, retry logic."""
+"""Enhanced runner tests — retry logic（并发闸门已随 spec 1 二十次修订退役）。"""
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.services.runner import _check_concurrency, _schedule_retry
-
-
-@pytest.mark.asyncio
-async def test_check_concurrency_under_limit_returns_true():
-    session = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.scalar.return_value = 0
-    session.execute.return_value = result_mock
-
-    ok = await _check_concurrency(session, "pipeline-1", max_concurrent=1)
-    assert ok is True
-
-
-@pytest.mark.asyncio
-async def test_check_concurrency_at_limit_returns_false():
-    session = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.scalar.return_value = 1
-    session.execute.return_value = result_mock
-
-    ok = await _check_concurrency(session, "pipeline-1", max_concurrent=1)
-    assert ok is False
-
-
-@pytest.mark.asyncio
-async def test_check_concurrency_over_limit_returns_false():
-    session = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.scalar.return_value = 5
-    session.execute.return_value = result_mock
-
-    ok = await _check_concurrency(session, "pipeline-1", max_concurrent=3)
-    assert ok is False
-
-
-@pytest.mark.asyncio
-async def test_check_concurrency_null_count_treated_as_zero():
-    session = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.scalar.return_value = None
-    session.execute.return_value = result_mock
-
-    ok = await _check_concurrency(session, "pipeline-1", max_concurrent=1)
-    assert ok is True
+from backend.services.runner import _schedule_retry
 
 
 @pytest.mark.asyncio

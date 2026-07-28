@@ -190,7 +190,6 @@ async def get_execution_logs(
             "level": log.level,
             "step": log.step_name,
             "message": log.message,
-            "screenshot_key": log.screenshot_key,
         }
         for log in logs
     ]
@@ -214,7 +213,6 @@ async def stream_execution_logs(
             "level": log.level,
             "step": log.step_name,
             "message": log.message,
-            "screenshot_key": log.screenshot_key,
         }
         for log in result.scalars().all()
     ]
@@ -270,8 +268,6 @@ async def delete_execution(
 ):
     from sqlalchemy import delete as sql_delete
 
-    from backend.models.execution import TaskArtifact
-
     result = await session.execute(
         select(TaskExecution).where(TaskExecution.id == execution_id)
     )
@@ -281,36 +277,10 @@ async def delete_execution(
     if execution.status in ("pending", "running"):
         raise HTTPException(400, "执行进行中，请先取消再删除")
 
-    # 仅删除执行记录 + 日志 + 产物元数据行（FK 约束要求）；
-    # MinIO 中的截图/产物文件与 pipeline 写入的业务数据一律保留（spec 4 §7.2）。
+    # 仅删除执行记录 + 日志行（FK 约束要求）；
+    # pipeline 写入的 MinIO 业务文件与业务数据一律保留（spec 4 §7.2）。
     await session.execute(
         sql_delete(TaskLog).where(TaskLog.execution_id == execution_id)
     )
-    await session.execute(
-        sql_delete(TaskArtifact).where(TaskArtifact.execution_id == execution_id)
-    )
     await session.delete(execution)
     await session.commit()
-
-
-@router.get("/{execution_id}/artifacts")
-async def get_execution_artifacts(
-    execution_id: str, session: AsyncSession = Depends(get_session)
-):
-    from backend.models.execution import TaskArtifact
-
-    result = await session.execute(
-        select(TaskArtifact).where(TaskArtifact.execution_id == execution_id)
-    )
-    artifacts = result.scalars().all()
-    return [
-        {
-            "id": a.id,
-            "file_name": a.file_name,
-            "content_type": a.content_type,
-            "size_bytes": a.size_bytes,
-            "download_url": f"/api/files/{a.id}/download",
-            "created_at": a.created_at.isoformat(),
-        }
-        for a in artifacts
-    ]

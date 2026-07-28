@@ -21,14 +21,17 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 COPY packages/backend/pyproject.toml packages/backend/
 COPY packages/engine/pyproject.toml packages/engine/
-RUN uv sync --frozen --no-dev
+# 两段式：源码未 COPY 时成员包（hatchling src 布局）无法构建，先只装第三方依赖；
+# --all-packages 必带——根 project 无 dependencies，不加则环境为空
+RUN uv sync --frozen --no-dev --all-packages --no-install-workspace
 
 # Install Playwright Chromium browser binary
 RUN uv run playwright install chromium
 
 COPY packages/backend/src/ packages/backend/src/
 COPY packages/engine/src/ packages/engine/src/
-COPY config/ config/
+# 装入 workspace 成员包（依赖已缓存，秒级）
+RUN uv sync --frozen --no-dev --all-packages
 
 EXPOSE 8900
 

@@ -39,17 +39,17 @@ _FIELDS = {
     display_name="OA 沟通批量转发",
     description="共用一次登录，按 forwards 列表逐条转发沟通待办并回写 fwd=1",
     trigger_modes=["api", "manual"],
-    version="1.1.4",
+    version="1.0.0",
     config_schema={
         "type": "object",
         "properties": {
+            "username": {"type": "string", "description": "OA 用户名"},
+            "password": {"type": "string", "format": "password", "description": "OA 密码"},
             "login_url": {
                 "type": "string",
                 "default": "https://ioa.sd-port.net/login.jsp",
                 "description": "OA 登录页地址",
             },
-            "username": {"type": "string", "description": "OA 用户名"},
-            "password": {"type": "string", "format": "password", "description": "OA 密码"},
             "forwards": {
                 "type": "array",
                 "description": "转发任务列表",
@@ -89,21 +89,6 @@ _FIELDS = {
                     "required": ["task_id", "recipients"],
                 },
             },
-            "page_load_timeout": {
-                "type": "integer",
-                "default": 15000,
-                "description": "页面加载超时(ms)",
-            },
-            "element_visible_timeout": {
-                "type": "integer",
-                "default": 5000,
-                "description": "元素可见超时(ms)",
-            },
-            "action_settle_timeout": {
-                "type": "integer",
-                "default": 500,
-                "description": "操作后稳定等待(ms)",
-            },
         },
         "required": ["username", "password", "forwards"],
     },
@@ -112,6 +97,7 @@ class OaCommunicateForwardPipeline(BasePipeline):
     async def execute(self, config: dict, ctx: ExecutionContext) -> PipelineResult:
         # Apply defaults from config_schema
         config.setdefault("login_url", "https://ioa.sd-port.net/login.jsp")
+        # 运行设置类参数由 runner 三级覆盖链注入（系统设置打底）；setdefault 仅作直连兜底
         config.setdefault("page_load_timeout", 15000)
         config.setdefault("element_visible_timeout", 5000)
         config.setdefault("action_settle_timeout", 500)
@@ -161,9 +147,8 @@ class OaCommunicateForwardPipeline(BasePipeline):
                 except Exception as e:
                     stats["failed"] += 1
                     errors.append({"task_id": task_id, "error": str(e)})
-                    screenshot = await self._safe_screenshot(page)
                     await ctx.logger.step(
-                        step, f"{progress}：转发失败: {e}", level="error", screenshot=screenshot
+                        step, f"{progress}：转发失败: {e}", level="error"
                     )
 
             await ctx.logger.step(
@@ -241,6 +226,8 @@ class OaCommunicateForwardPipeline(BasePipeline):
         await page.locator("input[name=docSubject]").wait_for(
             state="visible", timeout=config["page_load_timeout"]
         )
+        # 表单动态脚本稳定后再填写
+        await page.wait_for_timeout(config["action_settle_timeout"])
 
     async def _fill_form(self, page: Page, item: dict, config: dict, ctx, step: str) -> None:
         # 标题三态语义（spec 5 §6）：null/缺省 = 保留原标题；空字符串 = 显式清空；非空 = 覆盖
@@ -322,10 +309,3 @@ class OaCommunicateForwardPipeline(BasePipeline):
             await page.wait_for_timeout(200)
 
         raise RuntimeError("提交后未检测到成功文案（5s超时）")
-
-    @staticmethod
-    async def _safe_screenshot(page: Page) -> bytes | None:
-        try:
-            return await page.screenshot()
-        except Exception:
-            return None

@@ -1,7 +1,5 @@
-"""DbStepLogger — boto3 sync calls must not block the event loop."""
-import asyncio
-import time
-from unittest.mock import AsyncMock, MagicMock
+"""DbStepLogger — 写入 task_logs 并广播 SSE（截图链路已退役，spec 1 十七次修订）。"""
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -9,27 +7,26 @@ from backend.services.step_logger import DbStepLogger
 
 
 @pytest.mark.asyncio
-async def test_screenshot_upload_does_not_block_event_loop():
-    storage = MagicMock()
-
-    def slow_upload(*args):
-        time.sleep(0.3)  # 同步 boto3 阻塞
-        return "key"
-
-    storage.upload.side_effect = slow_upload
-
+async def test_step_writes_log_and_broadcasts():
     session = AsyncMock()
-    logger = DbStepLogger("e1", session, storage, prefix="p")
+    session.add = MagicMock()  # SQLAlchemy add 是同步方法
+    logger = DbStepLogger("e1", session)
 
-    ticker_elapsed = {}
+    with patch(
+        "backend.services.step_logger.log_broadcaster.publish", new=AsyncMock()
+    ) as publish:
+        await logger.step("login", "登录成功", level="info")
 
-    async def ticker():
-        start = time.monotonic()
-        await asyncio.sleep(0.1)
-        ticker_elapsed["t"] = time.monotonic() - start
+    session.add.assert_called_once()
+    log = session.add.call_args.args[0]
+    assert log.execution_id == "e1"
+    assert log.step_name == "login"
+    assert log.message == "登录成功"
+    session.flush.assert_awaited_once()
 
-    # ticker 先启动计时；若 upload 阻塞事件循环，ticker 会被拖到 ~0.3s 才完成
-    await asyncio.gather(ticker(), logger.step("s", "m", screenshot=b"png"))
-
-    assert ticker_elapsed["t"] < 0.25
-    storage.upload.assert_called_once()
+    publish.assert_awaited_once()
+    entry = publish.call_args.args[1]
+    assert entry["step"] == "login"
+    assert entry["message"] == "登录成功"
+    assert entry["level"] == "info"
+    assert "screenshot_key" not in entry

@@ -1,10 +1,11 @@
 import { Col, DatePicker, Form, Input, InputNumber, Modal, Radio, Row, Select, Switch, Tabs, TimePicker, message } from "antd";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import dayjs, { Dayjs } from "dayjs";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { executionApi, pipelineApi, scheduleApi, systemApi } from "../api/client";
 import { isJsonField, SchemaFields } from "./SchemaFields";
+import { labelWithHint } from "./LabelHint";
 import type { Pipeline, Schedule } from "../types";
 
 type CronPreset = "daily" | "weekday" | "weekly" | "monthly" | "custom";
@@ -62,17 +63,6 @@ function buildCron(
   }
 }
 
-/** 控件下方说明文字：小字灰显、最多两行（spec 4 §8.1） */
-const hintStyle: React.CSSProperties = {
-  color: "#999",
-  fontSize: 12,
-  lineHeight: 1.5,
-  display: "-webkit-box",
-  WebkitLineClamp: 2,
-  WebkitBoxOrient: "vertical",
-  overflow: "hidden",
-};
-
 type SchemaShape = {
   properties?: Record<string, { type?: string; format?: string; items?: { type?: string }; default?: unknown; description?: string }>;
   required?: string[];
@@ -124,6 +114,10 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [activeTab, setActiveTab] = useState("params");
+  // RunModal 常驻挂载（open 控制显隐），每次打开重置回第一个 Tab（spec 4 §4.5）
+  useEffect(() => {
+    if (open) setActiveTab("params");
+  }, [open]);
   const isEdit = !!editSchedule;
 
   const { data: pipelines } = useQuery({ queryKey: ["pipelines"], queryFn: pipelineApi.list });
@@ -146,7 +140,7 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
   const schema = pipeline?.config_schema as SchemaShape;
 
   const runMutation = useMutation({
-    mutationFn: (values: Record<string, unknown>) => {
+    mutationFn: (values: Record<string, unknown>): Promise<{ kind: "execution" | "schedule"; id: string }> => {
       const config = parseJsonFields((values.config as Record<string, unknown>) ?? {}, schema);
       if (values.exec_mode === "now") {
         return executionApi
@@ -205,8 +199,11 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
 
   if (!pipelines || !settings) return null;
 
-  // 三级覆盖链：全局运行设置优先于 schema default（spec 4 §4.4）
-  const globalDefaults: Record<string, unknown> = {
+  // 运行设置 5 项默认取全局运行设置（spec 4 §4.5 Tab 3）；编辑模式下已保存的
+  // config_override 覆盖在后（spread 顺序：全局打底 → 已存覆盖）
+  const runSettingDefaults = {
+    headless: settings.run_headless,
+    close_browser: settings.run_close_browser,
     page_load_timeout: settings.run_page_load_timeout,
     element_visible_timeout: settings.run_element_visible_timeout,
     action_settle_timeout: settings.run_action_settle_timeout,
@@ -220,8 +217,7 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
       pipeline_name: editSchedule.pipeline_name,
       exec_mode: "schedule",
       config: {
-        headless: settings.run_headless,
-        close_browser: settings.run_close_browser,
+        ...runSettingDefaults,
         // array/object 字段需序列化为 JSON 文本回显（spec 4 §4.4）
         ...stringifyJsonFields(editSchedule.config_override ?? {}, editSchema),
       },
@@ -241,10 +237,7 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
     initialValues = {
       pipeline_name: fixedPipeline?.name,
       exec_mode: mode === "schedule" ? "schedule" : "now",
-      config: {
-        headless: settings.run_headless,
-        close_browser: settings.run_close_browser,
-      },
+      config: { ...runSettingDefaults },
       trigger_type: "cron",
       cron_preset: "daily",
       cron_time: dayjs("08:00", "HH:mm"),
@@ -260,7 +253,14 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
     const first = errorFields[0]?.name ?? [];
     const last = String(first[first.length - 1] ?? "");
     if (first[0] === "config") {
-      setActiveTab(last === "headless" || last === "close_browser" ? "runtime" : "params");
+      const RUNTIME_KEYS = [
+        "headless",
+        "close_browser",
+        "page_load_timeout",
+        "element_visible_timeout",
+        "action_settle_timeout",
+      ];
+      setActiveTab(RUNTIME_KEYS.includes(last) ? "runtime" : "params");
     } else if (first[0] !== "pipeline_name") {
       setActiveTab("exec");
     }
@@ -314,7 +314,7 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
               label: "流水线参数",
               forceRender: true,
               children: schema ? (
-                <SchemaFields schema={schema} namePrefix={["config"]} defaults={globalDefaults} twoColumn seedDefaults={!isEdit} />
+                <SchemaFields schema={schema} namePrefix={["config"]} twoColumn seedDefaults={!isEdit} />
               ) : (
                 <div style={{ color: "#999" }}>当前流水线无可配置参数</div>
               ),
@@ -389,8 +389,7 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
                               <Col {...col3}>
                                 <Form.Item
                                   name="cron_time"
-                                  label="时间"
-                                  extra={<div style={hintStyle}>对应表达式：{buildCron(cronPreset, cronTime, cronWeekday, cronMonthday, cronCustom)}</div>}
+                                  label={labelWithHint("时间", `对应表达式：${buildCron(cronPreset, cronTime, cronWeekday, cronMonthday, cronCustom)}`)}
                                 >
                                   <TimePicker format="HH:mm" minuteStep={5} style={{ width: "100%" }} />
                                 </Form.Item>
@@ -399,9 +398,8 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
                               <Col span={24}>
                                 <Form.Item
                                   name="cron_expr_custom"
-                                  label="Cron 表达式"
+                                  label={labelWithHint("Cron 表达式", "5 段格式：分 时 日 月 星期，如 0 8 * * 1-5")}
                                   rules={[{ required: true, message: "请输入 cron 表达式" }]}
-                                  extra={<div style={hintStyle}>5 段格式：分 时 日 月 星期，如 0 8 * * 1-5</div>}
                                 >
                                   <Input placeholder="0 8 * * 1-5" />
                                 </Form.Item>
@@ -450,9 +448,8 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
                   <Col {...col2}>
                     <Form.Item
                       name={["config", "headless"]}
-                      label="无头模式"
+                      label={labelWithHint("无头模式", "浏览器不显示窗口（调试时可关闭）")}
                       valuePropName="checked"
-                      extra={<div style={hintStyle}>浏览器不显示窗口（调试时可关闭）</div>}
                     >
                       <Switch />
                     </Form.Item>
@@ -460,11 +457,37 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
                   <Col {...col2}>
                     <Form.Item
                       name={["config", "close_browser"]}
-                      label="结束后关闭浏览器"
+                      label={labelWithHint("结束后关闭浏览器", "关闭则保留浏览器进程供排查")}
                       valuePropName="checked"
-                      extra={<div style={hintStyle}>关闭则保留浏览器进程供排查</div>}
                     >
                       <Switch />
+                    </Form.Item>
+                  </Col>
+                  <Col {...col2}>
+                    <Form.Item
+                      name={["config", "page_load_timeout"]}
+                      label={labelWithHint("页面加载超时", "页面跳转后等待加载完成的时长")}
+                      rules={[{ required: true, message: "请输入页面加载超时" }]}
+                    >
+                      <InputNumber min={0} step={1000} addonAfter="毫秒" style={{ width: "100%" }} />
+                    </Form.Item>
+                  </Col>
+                  <Col {...col2}>
+                    <Form.Item
+                      name={["config", "element_visible_timeout"]}
+                      label={labelWithHint("元素可见超时", "等待页面元素出现的时长")}
+                      rules={[{ required: true, message: "请输入元素可见超时" }]}
+                    >
+                      <InputNumber min={0} step={1000} addonAfter="毫秒" style={{ width: "100%" }} />
+                    </Form.Item>
+                  </Col>
+                  <Col {...col2}>
+                    <Form.Item
+                      name={["config", "action_settle_timeout"]}
+                      label={labelWithHint("操作后稳定等待", "每次点击/输入等操作后的固定等待")}
+                      rules={[{ required: true, message: "请输入操作后稳定等待" }]}
+                    >
+                      <InputNumber min={0} step={100} addonAfter="毫秒" style={{ width: "100%" }} />
                     </Form.Item>
                   </Col>
                 </Row>

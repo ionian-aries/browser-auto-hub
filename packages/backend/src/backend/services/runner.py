@@ -2,12 +2,11 @@ import asyncio
 import traceback
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from backend.config import get_merged_settings
+from backend.config import get_settings
 from backend.models.execution import TaskExecution
-from backend.models.pipeline import Pipeline
 from backend.models.schedule import Schedule
 from backend.models.system_setting import SystemSetting
 from backend.services.broadcaster import log_broadcaster
@@ -67,10 +66,8 @@ async def _get_global_retry_config(session: AsyncSession) -> tuple[int, int]:
 
 # execution_id → 正在运行的 asyncio Task（cancel 端点据此真正停止执行）
 _running_tasks: dict[str, asyncio.Task] = {}
-# retry / redispatch 等后台 sleeper task：防 GC、便于监督
+# retry 等后台 sleeper task：防 GC、便于监督
 _background_tasks: set[asyncio.Task] = set()
-
-_BUSY_REDISPATCH_DELAY = 10  # seconds
 
 
 def _track_background(task: asyncio.Task) -> None:
@@ -95,29 +92,6 @@ def cancel_running_execution(execution_id: str) -> bool:
         return False
     task.cancel()
     return True
-
-
-async def _redispatch_later(
-    execution_id: str, session_factory: async_sessionmaker[AsyncSession]
-) -> None:
-    await asyncio.sleep(_BUSY_REDISPATCH_DELAY)
-    await dispatch_execution(execution_id, session_factory)
-
-
-async def _check_concurrency(
-    session: AsyncSession, pipeline_id: str, max_concurrent: int
-) -> bool:
-    """Return True if pipeline has capacity to run."""
-    result = await session.execute(
-        select(func.count())
-        .select_from(TaskExecution)
-        .where(
-            TaskExecution.pipeline_id == pipeline_id,
-            TaskExecution.status == "running",
-        )
-    )
-    running_count = result.scalar() or 0
-    return running_count < max_concurrent
 
 
 async def _schedule_retry(
@@ -197,35 +171,20 @@ async def _run_execution(
             await session.commit()
             return
 
-        # 锁 pipeline 行：并发检查 → 置 running 之间串行化同 pipeline 的并发派发。
-        # （此前只锁执行自己的行，两个执行可同时通过计数检查 — TOCTOU）
-        await session.execute(
-            select(Pipeline).where(Pipeline.id == pipeline_db.id).with_for_update()
-        )
-
-        # Concurrency check
-        if not await _check_concurrency(
-            session, pipeline_db.id, pipeline_db.max_concurrent
-        ):
-            # 保持 pending，延迟重派发；不再制造伪 failed 记录
-            await session.rollback()  # 释放 FOR UPDATE 行锁
-            _track_background(
-                asyncio.create_task(
-                    _redispatch_later(execution_id, session_factory)
-                )
-            )
-            return
-
-        # Start execution (commit releases the lock)
+        # Start execution（spec 1 二十次修订：并发闸门退役，派发即运行）
         execution.status = "running"
         execution.started_at = datetime.now(timezone.utc)
         await session.commit()
 
-        settings = await get_merged_settings(session)
+        settings = get_settings()  # infra 配置唯一来源 .env（spec 1 十八次修订）
         storage = MinioStorage(settings=settings)
-        logger = DbStepLogger(
-            execution_id, session, storage, prefix=settings.minio_object_prefix
-        )
+        # Debug 模式：config.debug=true 时，中间数据写入 JSONL 文件供 tail -f 查看
+        debug_path = None
+        if (execution.config or {}).get("debug"):
+            from backend.services.step_logger import DEBUG_LOG_DIR
+            debug_path = DEBUG_LOG_DIR / f"{execution_id}.jsonl"
+
+        logger = DbStepLogger(execution_id, session, debug_path=debug_path)
 
         ctx = ExecutionContext(
             logger=logger,
@@ -240,11 +199,8 @@ async def _run_execution(
             # 三级覆盖链：全局运行设置打底，execution.config 覆盖
             global_run = await _get_global_run_config(session)
             effective_config = {**global_run, **(execution.config or {})}
-            # Execute with timeout
-            exec_result = await asyncio.wait_for(
-                pipeline.execute(effective_config, ctx),
-                timeout=pipeline_db.timeout_seconds,
-            )
+            # spec 1 二十次修订：单次执行超时退役，不再 wait_for 强杀
+            exec_result = await pipeline.execute(effective_config, ctx)
 
             execution.status = "success" if exec_result.success else "failed"
             execution.result_summary = exec_result.summary
@@ -255,11 +211,6 @@ async def _run_execution(
             execution.status = "cancelled"
             execution.error_message = "Cancelled by user"
             raise
-        except asyncio.TimeoutError:
-            execution.status = "failed"
-            execution.error_message = (
-                f"Execution timeout after {pipeline_db.timeout_seconds}s"
-            )
         except Exception as e:
             execution.status = "failed"
             execution.error_message = (
