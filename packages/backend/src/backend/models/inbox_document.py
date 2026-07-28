@@ -4,10 +4,11 @@ from sqlalchemy import Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base, UTCDateTime, generate_uuid
+from engine.table_names import resolve_table
 
 
 class InboxDocument(Base):
-    __tablename__ = "inbox_documents"
+    __tablename__ = resolve_table("inbox_documents", "inbox_documents")
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     task_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)

@@ -34,3 +34,12 @@ def test_inbox_document_all_fields():
         forward_time=None,
     )
     assert doc.creator == "张三"
+
+
+def test_inbox_document_tablename_matches_resolve_table():
+    """ORM __tablename__ 必须与 engine resolve_table() 解析同一 logical name 的结果一致。"""
+    from engine.table_names import resolve_table
+    from backend.models.inbox_document import InboxDocument
+
+    expected = resolve_table("inbox_documents", "inbox_documents")
+    assert InboxDocument.__tablename__ == expected
