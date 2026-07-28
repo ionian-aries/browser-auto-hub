@@ -1,11 +1,8 @@
-import uuid
-
 from backend.models.inbox_document import InboxDocument
 
 
 def test_inbox_document_fields():
     doc = InboxDocument(
-        id=str(uuid.uuid4()),
         task_id="abc123",
         title="Test",
         participants="user1,user2",
@@ -20,7 +17,6 @@ def test_inbox_document_fields():
 
 def test_inbox_document_all_fields():
     doc = InboxDocument(
-        id=str(uuid.uuid4()),
         task_id="xyz",
         creator="张三",
         send_time="2026-07-21 08:00",

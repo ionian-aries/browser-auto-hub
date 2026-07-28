@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 from datetime import datetime, timezone
 
-from playwright.async_api import Page
+from playwright.async_api import Error as PlaywrightError, Page
 from sqlalchemy import text
 
 from engine.base import BasePipeline, PipelineResult
@@ -222,9 +222,30 @@ class OaCommunicateForwardPipeline(BasePipeline):
     # ---------- 浏览器步骤（移植自 oa_forward_steps） ----------
 
     @staticmethod
+    async def _raise_on_oa_error_page(page: Page) -> None:
+        """OA prompt 错误页检测：.errortitle（操作失败！）存在即抛错，附带 .errorlist 明细。
+
+        无效 showid（文档已删除/ID 错误）、表单校验失败等场景 OA 渲染错误页而非
+        目标表单。快速失败并上报真实原因，避免空等元素超时（15s）且报错信息晦涩。
+        """
+        errortitle = page.locator(".errortitle")
+        if await errortitle.count() == 0:
+            return
+        messages = [
+            m.strip()
+            for m in await page.locator(".errorlist").all_inner_texts()
+            if m.strip()
+        ]
+        if not messages:
+            title_text = (await errortitle.first.inner_text()).strip()
+            messages = [title_text] if title_text else ["未知错误"]
+        raise RuntimeError(f"OA 返回错误页：{'; '.join(messages)}")
+
+    @staticmethod
     async def _goto_forward(page: Page, task_id: str, config: dict) -> None:
         url = f"{_OA_ORIGIN}{_FORWARD_PATH}{task_id}"
         await page.goto(url, wait_until="domcontentloaded")
+        await OaCommunicateForwardPipeline._raise_on_oa_error_page(page)
         # docSubject 可见即表单就绪
         await page.locator("input[name=docSubject]").wait_for(
             state="visible", timeout=config["page_load_timeout"]
@@ -303,12 +324,19 @@ class OaCommunicateForwardPipeline(BasePipeline):
     async def _submit_and_verify(page: Page) -> None:
         await page.get_by_role("cell", name="提交", exact=True).click()
 
-        # 成功页约3s后自动关闭，需轮询所有标签页快速捕获
+        # 成功页约3s后自动关闭，需轮询所有标签页快速捕获；
+        # 提交校验失败时 OA 渲染 prompt 错误页，同样需快速识别
         deadline = time.time() + 5
         while time.time() < deadline:
             for p in page.context.pages:
-                if not p.is_closed() and await p.get_by_text(_SUCCESS_TEXT).count() > 0:
-                    return
+                if p.is_closed():
+                    continue
+                try:
+                    if await p.get_by_text(_SUCCESS_TEXT).count() > 0:
+                        return
+                    await OaCommunicateForwardPipeline._raise_on_oa_error_page(p)
+                except PlaywrightError:
+                    continue  # 探测间隙页面关闭/导航（成功页自动关闭），下轮重试
             await page.wait_for_timeout(200)
 
         raise RuntimeError("提交后未检测到成功文案（5s超时）")
