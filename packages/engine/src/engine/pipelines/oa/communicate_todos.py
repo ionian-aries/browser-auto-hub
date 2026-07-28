@@ -1,9 +1,10 @@
 """OA 沟通待办采集 Pipeline
 
 采集流程（spec 3 2026-07-24 修订三/四）：
-1. 主扫描：列表页直接从标题链接 href 提取 fdId 去重（不为已知条目开详情页），
-   未知条目记录 {task_id, href}；
-2. 详情：goto(href) 直达，免疫「新消息置顶」导致的列表位移；
+1. 主扫描：列表页从标题链接 href 提取通知 ID 预过滤（本轮内不重复收集；
+   跨轮去重无效——通知 ID ≠ DB 中的文档 ID），未知条目记录 {task_id, href}；
+2. 详情：goto(href) 直达，免疫「新消息置顶」导致的列表位移；task_id 一律取
+   落地 URL 中的文档 ID（OA 会将通知页重定向到文档页），权威去重在此完成；
    concurrency（默认 1）控制同 context 并行标签页数（Semaphore 限流）；
 3. 复核：详情采集后重载列表完整重扫，有新条目则继续，最多 max_verify_rounds
    轮熔断（默认 2），仍有流入则留待下次调度自愈。
@@ -16,7 +17,7 @@ import re
 import time
 from urllib.parse import quote, urljoin
 
-from playwright.async_api import Page
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from engine.base import BasePipeline, PipelineResult
 from engine.context import ExecutionContext
@@ -64,6 +65,11 @@ _MAX_VERIFY_ROUNDS = 2
                 "default": 1,
                 "description": "详情页并发采集数（同一 context 内并行标签页上限；调大需评估 OA 限流）",
             },
+            "attachment_download_timeout": {
+                "type": "integer",
+                "default": 300000,
+                "description": "单个附件下载总超时（毫秒，含连接与完整传输）。大附件慢链路需留足时间",
+            },
         },
         "required": ["username", "password"],
     },
@@ -78,6 +84,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
         config.setdefault("max_pages", 100)
         config.setdefault("max_verify_rounds", _MAX_VERIFY_ROUNDS)
         config.setdefault("concurrency", 1)
+        config.setdefault("attachment_download_timeout", 300000)
 
         records: list[dict] = []
         stats = {
@@ -116,7 +123,7 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 if total_count is not None:
                     await ctx.logger.step("crawl", f"待办总数：共 {total_count} 条")
 
-                # 主扫描：列表级去重，收集未知条目的 href（不开详情页）
+                # 主扫描：列表级通知 ID 预过滤（减少详情页打开次数），权威去重在 _open_detail
                 pending = await self._scan_all_pages(
                     frame, config, ctx, existing_ids, stats, count_skips=True
                 )
@@ -224,6 +231,10 @@ class OaCommunicateTodosPipeline(BasePipeline):
     ) -> list[dict]:
         """列表级全量扫描：逐页读取标题链接 href 提取 fdId 去重（不开详情页）。
 
+        注意：列表 href 中的 fdId 是通知记录 ID，非文档 ID（两者不同）。
+        此处去重仅防止同一通知在本轮扫描中被重复收集；权威去重在 _open_detail
+        中基于详情页落地 URL 的文档 ID 完成。
+
         返回未知条目 [{task_id, href}]；href 无 fdId 的个别条目 task_id 置 None，
         延迟到详情页 URL 判定。count_skips=False（复核轮）时不重复累计 skipped。
         """
@@ -290,6 +301,10 @@ class OaCommunicateTodosPipeline(BasePipeline):
     ) -> dict | None:
         """goto(href) 直达详情页提取元数据；单条失败计数后继续，不中断执行。
 
+        task_id 必须从详情页落地 URL 提取（文档 ID），而非列表 href 中的通知 ID。
+        OA 服务器会将 sysNotifyTodo.do?fdId=通知ID 重定向到实际文档页（fdId=文档ID），
+        两者是不同的值。forward pipeline 的 showid= 参数需要文档 ID。
+
         semaphore 限制同 context 并行标签页数；shared_lock 串行日志写库
         （共享 AsyncSession）与 existing_ids 延迟去重的 check-then-add。
         """
@@ -297,27 +312,44 @@ class OaCommunicateTodosPipeline(BasePipeline):
             detail = await page.context.new_page()
             try:
                 await detail.goto(item["href"], wait_until="domcontentloaded")
-                task_id = item["task_id"]
-                if task_id is None:
-                    # href 无 fdId 的兜底：从落地 URL 提取并做延迟去重
-                    task_id = self._extract_fd_id(detail.url) or ""
-                    if not task_id:
-                        stats["extract_failures"] += 1
-                        async with shared_lock:
-                            await ctx.logger.step(
-                                "extract",
-                                f"详情页 URL 无 task_id，跳过：{item['href'][:80]}",
-                                level="warn",
-                            )
-                        return None
+                # 兜底前端 JS 跳转：服务端 302 时 goto 已跟随（URL 已是文档页，零开销）；
+                # URL 仍停留在通知页 = JS 跳转（等导航完成）或文档已删除（等超时后跳过）
+                if "sysNotifyTodo" in detail.url:
+                    try:
+                        await detail.wait_for_url(
+                            lambda u: "sysNotifyTodo" not in u, timeout=5000
+                        )
+                    except PlaywrightTimeoutError:
+                        pass
+                if "sysNotifyTodo" in detail.url:
+                    stats["extract_failures"] += 1
                     async with shared_lock:
-                        if task_id in existing_ids:
-                            stats["skipped"] += 1
-                            await ctx.logger.step(
-                                "extract", f"{task_id[:8]} 已存在，跳过（延迟去重）"
-                            )
-                            return None
-                        existing_ids.add(task_id)
+                        await ctx.logger.step(
+                            "extract",
+                            f"详情页未跳转到文档页（文档可能已删除），跳过：{item['href'][:80]}",
+                            level="warn",
+                        )
+                    return None
+                # 始终从详情页落地 URL 提取 task_id（文档 ID，非列表 href 中的通知 ID）
+                # OA 会将 sysNotifyTodo.do?fdId=通知ID 重定向到实际文档页（fdId=文档ID）
+                task_id = self._extract_fd_id(detail.url)
+                if not task_id:
+                    stats["extract_failures"] += 1
+                    async with shared_lock:
+                        await ctx.logger.step(
+                            "extract",
+                            f"详情页 URL 无 task_id，跳过：{item['href'][:80]}",
+                            level="warn",
+                        )
+                    return None
+                async with shared_lock:
+                    if task_id in existing_ids:
+                        stats["skipped"] += 1
+                        await ctx.logger.step(
+                            "extract", f"{task_id[:8]} 已存在，跳过（延迟去重）"
+                        )
+                        return None
+                    existing_ids.add(task_id)
 
                 record = await self._extract_meta(
                     detail, task_id, config, ctx, stats, shared_lock
@@ -440,25 +472,48 @@ class OaCommunicateTodosPipeline(BasePipeline):
                 continue
 
             try:
+                # 校验响应：无校验时 OA 错误页（503/登录页 HTML）会被当附件保存
+                # （2026-07-28 事故：Apache 反代 hang 300s 后返回 503 HTML，被当 PDF 上传）
                 b64_data = await page.evaluate(
-                    """async (fdId) => {
-                        const resp = await fetch(
-                            `/sys/attachment/sys_att_main/sysAttMain.do?method=download&fdId=${fdId}`,
-                            {credentials: 'include'}
-                        );
-                        const buf = await resp.arrayBuffer();
-                        const bytes = new Uint8Array(buf);
-                        let binary = '';
-                        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-                        return btoa(binary);
+                    """async ({ fdId, timeoutMs }) => {
+                        const controller = new AbortController();
+                        const timer = setTimeout(() => controller.abort(), timeoutMs);
+                        try {
+                            const resp = await fetch(
+                                `/sys/attachment/sys_att_main/sysAttMain.do?method=download&fdId=${fdId}`,
+                                { credentials: 'include', signal: controller.signal }
+                            );
+                            if (!resp.ok) {
+                                throw new Error(`HTTP ${resp.status}`);
+                            }
+                            const ct = resp.headers.get('content-type') || '';
+                            if (ct.includes('text/html')) {
+                                throw new Error(`返回 HTML 而非文件（${ct}），可能服务器错误或登录失效`);
+                            }
+                            const buf = await resp.arrayBuffer();
+                            const bytes = new Uint8Array(buf);
+                            // 分块转换：逐字节 fromCharCode 对大附件极慢
+                            let binary = '';
+                            const CHUNK = 0x8000;
+                            for (let i = 0; i < bytes.length; i += CHUNK) {
+                                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+                            }
+                            return btoa(binary);
+                        } catch (e) {
+                            if (e.name === 'AbortError') throw new Error(`附件下载超时（${timeoutMs}ms）`);
+                            throw e;
+                        } finally {
+                            clearTimeout(timer);
+                        }
                     }""",
-                    fd_id,
+                    {"fdId": fd_id, "timeoutMs": config["attachment_download_timeout"]},
                 )
 
                 file_bytes = base64.b64decode(b64_data)
                 # 前缀完全决定存储路径（spec 1 二十五次修订：删除硬编码 attachments 段）
                 object_key = f"{ctx.settings.minio_object_prefix}/{task_id}/{filename}"
-                ctx.minio.upload(object_key, file_bytes)
+                # boto3 为同步调用，to_thread 避免阻塞事件循环（并发详情页互不影响）
+                await asyncio.to_thread(ctx.minio.upload, object_key, file_bytes)
                 # 平台代理下载地址（spec 1 二十三次修订：预签名退役，URL 永不过期）；
                 # safe="/" 保留 key 内路径分隔，中文文件名百分号编码
                 url = f"{ctx.settings.public_base_url}/api/files/{quote(object_key, safe='/')}"
@@ -529,19 +584,25 @@ class OaCommunicateTodosPipeline(BasePipeline):
         return int(m.group(1)) if m else None
 
     async def _save_records(self, records: list[dict], ctx: ExecutionContext):
-        """批量写入 inbox_documents（raw SQL，engine 不可导入 backend models；表名由 TABLE_ 环境变量配置）"""
-        import uuid
-
+        """批量写入 inbox_documents（raw SQL，engine 不可导入 backend models；表名由 TABLE_ 环境变量配置；
+        id 为 BIGINT 自增主键，不显式赋值，由数据库生成）"""
         from sqlalchemy import text
 
         insert_sql = text(f"""
-            INSERT INTO {_INBOX_TABLE} (id, task_id, creator, send_time, title, participants, cc_recipients, summary, attachment_urls)
-            VALUES (:id, :task_id, :creator, :send_time, :title, :participants, :cc_recipients, :summary, :attachment_urls)
+            INSERT INTO {_INBOX_TABLE} (task_id, creator, send_time, title, participants, cc_recipients, summary, attachment_urls)
+            VALUES (:task_id, :creator, :send_time, :title, :participants, :cc_recipients, :summary, :attachment_urls)
+            ON DUPLICATE KEY UPDATE
+                creator = VALUES(creator),
+                send_time = VALUES(send_time),
+                title = VALUES(title),
+                participants = VALUES(participants),
+                cc_recipients = VALUES(cc_recipients),
+                summary = VALUES(summary),
+                attachment_urls = VALUES(attachment_urls)
         """)
 
         for record in records:
             await ctx.db.execute(insert_sql, {
-                "id": str(uuid.uuid4()),
                 "task_id": record["task_id"],
                 "creator": record.get("creator", ""),
                 "send_time": record.get("send_time", ""),
