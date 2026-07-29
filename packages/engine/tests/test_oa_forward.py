@@ -108,38 +108,49 @@ async def test_check_pending_missing():
 
 
 @pytest.mark.asyncio
-async def test_check_pending_forwarded_by_flag():
+async def test_check_pending_skipped_only_when_fwd_two():
+    """仅 fwd=2 跳过（幂等键，2026-07-28 修订）。"""
     cf = _load()
-    ctx = FakeCtx(FakeDb([FakeResult(row=(1, None))]))
-    assert await cf.OaCommunicateForwardPipeline._check_pending(ctx, "t1") == "forwarded"
+    ctx = FakeCtx(FakeDb([FakeResult(row=(2,))]))
+    assert await cf.OaCommunicateForwardPipeline._check_pending(ctx, "t1") == "skipped"
 
 
 @pytest.mark.asyncio
-async def test_check_pending_forwarded_by_time():
+async def test_check_pending_fwd_zero_executes():
     cf = _load()
-    ctx = FakeCtx(FakeDb([FakeResult(row=(0, datetime(2026, 7, 22)))]))
-    assert await cf.OaCommunicateForwardPipeline._check_pending(ctx, "t1") == "forwarded"
-
-
-@pytest.mark.asyncio
-async def test_check_pending_pending():
-    cf = _load()
-    ctx = FakeCtx(FakeDb([FakeResult(row=(0, None))]))
+    ctx = FakeCtx(FakeDb([FakeResult(row=(0,))]))
     assert await cf.OaCommunicateForwardPipeline._check_pending(ctx, "t1") == "pending"
 
 
 @pytest.mark.asyncio
-async def test_update_fwd_atomic_sql_and_rowcount():
+async def test_check_pending_fwd_one_executes():
+    """fwd=1（历史已转发值）不豁免，照常执行，成功后覆盖为 2。"""
     cf = _load()
-    db = FakeDb([FakeResult(row=(0, None)), FakeResult(rowcount=1)])
+    ctx = FakeCtx(FakeDb([FakeResult(row=(1,))]))
+    assert await cf.OaCommunicateForwardPipeline._check_pending(ctx, "t1") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_check_pending_fwd_null_executes():
+    cf = _load()
+    ctx = FakeCtx(FakeDb([FakeResult(row=(None,))]))
+    assert await cf.OaCommunicateForwardPipeline._check_pending(ctx, "t1") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_update_fwd_sql_and_rowcount():
+    """2026-07-28 修订：无守卫条件，直接 SET fwd = 2 按 task_id 更新，无前置 SELECT。"""
+    cf = _load()
+    db = FakeDb([FakeResult(rowcount=1)])
     ctx = FakeCtx(db)
     result = await cf.OaCommunicateForwardPipeline._update_fwd(ctx, "t1")
     assert result == "updated"
-    update_sql, params = db.executed[1]
-    assert "fwd = 1" in update_sql
+    assert len(db.executed) == 1  # 仅一条 UPDATE，不再前置 SELECT
+    update_sql, params = db.executed[0]
+    assert "fwd = 2" in update_sql
     assert "forward_time" in update_sql
-    assert "(fwd IS NULL OR fwd = 0)" in update_sql
-    assert "forward_time IS NULL" in update_sql
+    assert "fwd IS NULL" not in update_sql
+    assert "forward_time IS NULL" not in update_sql
     assert params["task_id"] == "t1"
 
 
@@ -147,20 +158,21 @@ async def test_update_fwd_atomic_sql_and_rowcount():
 async def test_update_fwd_timestamp_is_utc():
     """forward_time 必须写 UTC 值，与 backend UTCDateTime（读回按 UTC 解释）对齐。"""
     cf = _load()
-    db = FakeDb([FakeResult(row=(0, None)), FakeResult(rowcount=1)])
+    db = FakeDb([FakeResult(rowcount=1)])
     ctx = FakeCtx(db)
     await cf.OaCommunicateForwardPipeline._update_fwd(ctx, "t1")
-    ts = db.executed[1][1]["ts"]
+    ts = db.executed[0][1]["ts"]
     utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     assert abs((utc_now - ts).total_seconds()) < 60
 
 
 @pytest.mark.asyncio
-async def test_update_fwd_concurrent_lost():
+async def test_update_fwd_missing():
+    """task_id 不存在时 rowcount=0 → 'missing'。"""
     cf = _load()
-    db = FakeDb([FakeResult(row=(0, None)), FakeResult(rowcount=0)])
+    db = FakeDb([FakeResult(rowcount=0)])
     ctx = FakeCtx(db)
-    assert await cf.OaCommunicateForwardPipeline._update_fwd(ctx, "t1") == "forwarded"
+    assert await cf.OaCommunicateForwardPipeline._update_fwd(ctx, "t1") == "missing"
 
 
 # ---------- execute 批量流程 ----------
@@ -223,7 +235,8 @@ async def test_execute_batch_isolation_and_per_item_commit(monkeypatch):
     _patch_browser_and_login(monkeypatch, cf, counters)
 
     cls = cf.OaCommunicateForwardPipeline
-    statuses = {"a": "pending", "b": "pending", "c": "forwarded"}
+    # 仅 fwd=2 跳过：a 执行、b 执行（填表失败）、c 跳过
+    statuses = {"a": "pending", "b": "pending", "c": "skipped"}
     monkeypatch.setattr(
         cls, "_check_pending", staticmethod(lambda ctx, tid: _async(statuses[tid]))
     )
@@ -252,8 +265,8 @@ async def test_execute_batch_isolation_and_per_item_commit(monkeypatch):
     assert result.success is False  # b 失败
     s = result.summary
     assert s["total"] == 3
-    assert s["forwarded"] == 1
-    assert s["skipped"] == 1
+    assert s["forwarded"] == 1      # 仅 a 成功
+    assert s["skipped"] == 1        # c（fwd=2）跳过
     assert s["failed"] == 1
     assert s["errors"] == [{"task_id": "b", "error": "未找到: 某人"}]
     assert counters["login"] == 1          # 一次登录

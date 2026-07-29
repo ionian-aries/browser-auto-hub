@@ -1,8 +1,8 @@
-"""OA 沟通批量转发 Pipeline — 共用一次登录，逐条转发并逐条回写 fwd=1。
+"""OA 沟通批量转发 Pipeline — 共用一次登录，逐条转发并逐条回写 fwd=2。
 
 迁移自 browser-agent/scripts_v3/oa_communicate_forward.py。
 事务语义：每条 submit 成功后立即独立 commit（不依赖 runner 统一 commit），
-保证进程崩溃/超时后 DB 状态与 OA 真实状态一致，杜绝重复转发。
+保证进程崩溃/超时后 DB 状态与 OA 真实状态一致。
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ _FIELDS = {
 @register_pipeline(
     name="oa.communicate_forward",
     display_name="OA 沟通批量转发",
-    description="共用一次登录，按 forwards 列表逐条转发沟通待办并回写 fwd=1",
+    description="共用一次登录，按 forwards 列表逐条转发沟通待办并回写 fwd=2",
     trigger_modes=["api", "manual"],
     version="1.0.0",
     config_schema={
@@ -133,9 +133,9 @@ class OaCommunicateForwardPipeline(BasePipeline):
                     status = await self._check_pending(ctx, task_id)
                     if status == "missing":
                         raise RuntimeError("DB 中不存在该 task_id（未采集？）")
-                    if status == "forwarded":
+                    if status == "skipped":
                         stats["skipped"] += 1
-                        await ctx.logger.step(step, f"{progress}：该记录已转发，跳过（去重）")
+                        await ctx.logger.step(step, f"{progress}：该记录已转发（fwd=2），跳过")
                         continue
 
                     await self._goto_forward(page, task_id, config)
@@ -144,7 +144,7 @@ class OaCommunicateForwardPipeline(BasePipeline):
                     await self._submit_and_verify(page)
                     await ctx.logger.step(step, f"{progress}：已提交，检测到成功文案")
                     result = await self._update_fwd(ctx, task_id)
-                    await ctx.db.commit()  # 逐条独立提交：崩溃也不丢 fwd=1
+                    await ctx.db.commit()  # 逐条独立提交：崩溃也不丢 fwd=2
                     stats["forwarded"] += 1
                     await ctx.logger.step(step, f"{progress}：转发成功 (db: {result})")
                 except Exception as e:
@@ -188,36 +188,33 @@ class OaCommunicateForwardPipeline(BasePipeline):
 
     @staticmethod
     async def _check_pending(ctx: ExecutionContext, task_id: str) -> str:
-        """返回 'pending'（未转发）| 'forwarded' | 'missing'。实时查询，不预载。"""
+        """返回 'pending'（可执行）| 'skipped'（fwd=2 已转发）| 'missing'。实时查询，不预载。
+
+        幂等键仅为 fwd=2（本平台回写值，2026-07-28 修订）：fwd 为 0/1/NULL 均照常执行，
+        执行成功后由 _update_fwd 覆盖为 2。
+        """
         result = await ctx.db.execute(
-            text(f"SELECT fwd, forward_time FROM {_INBOX_TABLE} WHERE task_id = :task_id"),
+            text(f"SELECT fwd FROM {_INBOX_TABLE} WHERE task_id = :task_id"),
             {"task_id": task_id},
         )
         row = result.fetchone()
         if not row:
             return "missing"
-        fwd, forward_time = row
-        if fwd == 1 or forward_time is not None:
-            return "forwarded"
-        return "pending"
+        return "skipped" if row[0] == 2 else "pending"
 
     @staticmethod
     async def _update_fwd(ctx: ExecutionContext, task_id: str) -> str:
-        """原子回写 fwd=1, forward_time=NOW。返回 'updated'|'forwarded'|'missing'。"""
-        status = await OaCommunicateForwardPipeline._check_pending(ctx, task_id)
-        if status != "pending":
-            return status
+        """回写 fwd=2, forward_time=NOW。无守卫条件，直接按 task_id 更新
+        （2026-07-28 修订：不再校验 fwd 当前是 0 还是 1）。返回 'updated'|'missing'。"""
         result = await ctx.db.execute(
             text(
-                f"UPDATE {_INBOX_TABLE} SET fwd = 1, forward_time = :ts"
+                f"UPDATE {_INBOX_TABLE} SET fwd = 2, forward_time = :ts"
                 " WHERE task_id = :task_id"
-                " AND (fwd IS NULL OR fwd = 0) AND forward_time IS NULL"
             ),
             # 原始 SQL 不经过 UTCDateTime.bind，需自行写 UTC-naive 值
             {"ts": datetime.now(timezone.utc).replace(tzinfo=None), "task_id": task_id},
         )
-        # WHERE 条件原子防重：并发重复执行时只有一方能写入
-        return "updated" if result.rowcount > 0 else "forwarded"
+        return "updated" if result.rowcount > 0 else "missing"
 
     # ---------- 浏览器步骤（移植自 oa_forward_steps） ----------
 
