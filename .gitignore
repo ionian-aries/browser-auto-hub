@@ -22,7 +22,7 @@ packages/frontend/dist/
 .DS_Store
 
 # 交付包（镜像 tarball + 部署文件副本，666M+，不入库）
-# 交付包/
+交付包/
 交付包.zip
 
 # uv
