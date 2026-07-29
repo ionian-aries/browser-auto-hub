@@ -18,6 +18,11 @@ packages/frontend/dist/
 .vscode/
 .cursor/
 
+# AI 工具会话产物
+.claude/
+.superpowers/
+docs/superpowers/
+
 # OS
 .DS_Store
 
