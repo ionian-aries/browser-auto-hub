@@ -1,4 +1,5 @@
-import { Col, DatePicker, Form, Input, InputNumber, Row, Select, Switch } from "antd";
+import { Col, DatePicker, Form, Input, InputNumber, Radio, Row, Select, Switch } from "antd";
+import { useEffect, useState } from "react";
 import dayjs, { Dayjs } from "dayjs";
 import { labelWithHint } from "./LabelHint";
 import { RangePeriodField } from "./RangePeriodField";
@@ -28,6 +29,8 @@ interface SchemaProperty {
   "x-range-label"?: string;
   /** 允许相对表达式（today / today-N，engine 执行时解析） */
   "x-allow-relative"?: boolean;
+  /** array+items.enum：空值语义为"全量"，渲染为 全部/指定 两态 Radio + 条件多选（label 为全部态文案） */
+  "x-empty-means-all"?: string;
 }
 
 interface Props {
@@ -51,6 +54,59 @@ interface Props {
 export function isJsonField(prop: SchemaProperty): boolean {
   if (prop.type === "object") return true;
   return prop.type === "array" && prop.items?.type !== "string";
+}
+
+/**
+ * x-empty-means-all 多选控件：全部/指定两态分离。
+ * 全部 = 提交空（undefined），引擎执行时展开为全量（符号化引用，新增成员自动纳入）；
+ * 指定 = 启用多选，提交显式名单。两态互斥，构造上不可能出现"全部+部分"混写。
+ * value/onChange 由外层 Form.Item 注入。
+ */
+function EnumMultiWithAll({
+  value,
+  onChange,
+  options,
+  allLabel,
+}: {
+  value?: string[];
+  onChange?: (v: string[] | undefined) => void;
+  options: { value: string; label: string }[];
+  allLabel: string;
+}) {
+  const [mode, setMode] = useState<"all" | "pick">(value?.length ? "pick" : "all");
+  // 异步回显兜底：初始为空（全部态）后又有值注入（如编辑场景预填），切到指定态
+  useEffect(() => {
+    if (mode === "all" && value && value.length > 0) setMode("pick");
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div>
+      <Radio.Group
+        value={mode}
+        onChange={(e) => {
+          const m = e.target.value as "all" | "pick";
+          setMode(m);
+          if (m === "all") onChange?.(undefined);
+        }}
+        optionType="button"
+        buttonStyle="solid"
+        style={{ marginBottom: 8 }}
+        options={[
+          { value: "all", label: allLabel },
+          { value: "pick", label: "指定" },
+        ]}
+      />
+      {mode === "pick" && (
+        <Select
+          mode="multiple"
+          value={value}
+          onChange={onChange}
+          options={options}
+          placeholder="请选择（可多选）"
+          style={{ width: "100%" }}
+        />
+      )}
+    </div>
+  );
 }
 
 /**
@@ -203,14 +259,23 @@ export function SchemaFields({ schema, namePrefix = [], twoColumn, seedDefaults 
       );
     } else if (prop.type === "array") {
       const itemEnum = prop.items?.enum;
+      const emptyAllLabel = prop["x-empty-means-all"];
       control = itemEnum ? (
-        // items.enum 闭集：多选下拉，防自由录入笔误
-        <Select
-          mode="multiple"
-          options={itemEnum.map((v) => ({ value: v as string, label: String(v) }))}
-          placeholder="请选择"
-          style={{ width: "100%" }}
-        />
+        emptyAllLabel ? (
+          // 空 = 全量语义：全部/指定两态 Radio（值域纯净，杜绝"全部+部分"混写）
+          <EnumMultiWithAll
+            options={itemEnum.map((v) => ({ value: v as string, label: String(v) }))}
+            allLabel={emptyAllLabel}
+          />
+        ) : (
+          // items.enum 闭集：多选下拉，防自由录入笔误
+          <Select
+            mode="multiple"
+            options={itemEnum.map((v) => ({ value: v as string, label: String(v) }))}
+            placeholder="请选择"
+            style={{ width: "100%" }}
+          />
+        )
       ) : (
         // items.type === "string"：tags 录入，原生字符串数组提交
         <Select mode="tags" open={false} suffixIcon={null} placeholder="回车录入" style={{ width: "100%" }} />

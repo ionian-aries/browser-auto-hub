@@ -83,7 +83,8 @@ def _recap(outcomes: list[dict]) -> str:
                 "type": "array",
                 "items": {"type": "string", "enum": _source_names()},
                 "x-order": 1,
-                "description": "信源名称列表（对应 sources.json 的 source_name）",
+                "x-empty-means-all": "全部信源（后续新增自动纳入）",
+                "description": "信源选择：不选 = 全部已接入信源；勾选后仅采集所选（补录/重录建议显式指定）",
             },
             "start_date": {
                 "type": "string",
@@ -147,7 +148,7 @@ def _recap(outcomes: list[dict]) -> str:
                 "description": "LLM 采样温度（筛选判定任务取 0 最稳定，消除采样漂移）",
             },
         },
-        "required": ["sources", "start_date", "end_date"],
+        "required": ["start_date", "end_date"],
     },
 )
 class PortMaritimeInfoHarvestPipeline(BasePipeline):
@@ -155,13 +156,23 @@ class PortMaritimeInfoHarvestPipeline(BasePipeline):
 
     @classmethod
     def validate_config(cls, config: dict) -> str | None:
-        """触发边界预校验：sources 必填 + 日期表达式解析后校验（与 execute 同一套函数）。
+        """触发边界预校验：sources 省略=全部，空数组非法，显式名单须在已接入信源内。
+
+        空数组拒绝（而非视作全部）：过滤语义中 [] 通识为空集，且动态拼装
+        调用方上游出 bug 时恰好得到空数组，静默展开为全量采集是最坏失败
+        模式——fail-fast 并引导正确写法（省略字段）。
 
         注意：相对表达式在此按调用时刻解析仅为校验可行性；真实窗口仍以
         execute 时刻解析为准（cron 滚动语义不受影响）。
         """
-        if not (config.get("sources") or []):
-            return "缺少必填参数 sources"
+        sources = config.get("sources")
+        if sources is not None and not sources:
+            return "sources 为空数组：省略该字段即表示采集全部信源，或列出具体信源名"
+        if sources:
+            available = _source_names()
+            unknown = [s for s in sources if s not in available]
+            if unknown:
+                return f"未接入信源: {unknown}，可用: {available}（或省略 sources 表示全部）"
         start_date = collect.resolve_date_expr(config.get("start_date", ""))
         end_date = collect.resolve_date_expr(config.get("end_date", ""))
         if not start_date or not end_date:
@@ -206,16 +217,19 @@ class PortMaritimeInfoHarvestPipeline(BasePipeline):
         force = bool(config.get("force", False))
         preference = config.get("preference", "")
 
-        # ── 信源选择 ──
+        # ── 信源选择（sources 省略 = 全部：定时任务免维护，新增信源自动纳入；
+        #    空数组已被 validate_config 拦截，到此处 None 才展开） ──
         sources_data = json.loads(_SOURCES_FILE.read_text(encoding="utf-8"))
+        available = [
+            s.get("source_name") for s in sources_data.get("sources", [])
+        ]
+        if not source_names:
+            source_names = available
         selected = [
             s for s in sources_data.get("sources", [])
             if s.get("source_name") in source_names
         ]
         if not selected:
-            available = [
-                s.get("source_name") for s in sources_data.get("sources", [])
-            ]
             return PipelineResult(
                 success=False,
                 error=f"未找到信源: {source_names}，可用: {available}",
