@@ -49,10 +49,16 @@ def _execution(**overrides):
 def _session(execution, commit_side_effects=None):
     """Main-session mock matching _run_execution's execute() call order."""
     s = AsyncMock()
-    s.execute.side_effect = [
+    results = [
         _result(scalar_one_or_none=execution),  # select execution FOR UPDATE
         _result(scalars=[]),  # _get_global_run_config
     ]
+
+    def _exec(*a, **k):
+        # 前两次按序返回；后续（finalize 条件 UPDATE 等）返回通用 mock
+        return results.pop(0) if results else MagicMock()
+
+    s.execute.side_effect = _exec
     if commit_side_effects is not None:
         s.commit.side_effect = commit_side_effects
     return s
@@ -190,7 +196,11 @@ async def test_final_commit_failure_falls_back_to_fresh_session(_patched):
 
     session.rollback.assert_awaited()
     fallback_session.commit.assert_awaited()
-    assert fallback_row.status == "success"
+    # 兜底终态走条件 UPDATE（不覆盖 cancelled）：断言 Update 及写入值
+    from sqlalchemy import Update
+    stmt = fallback_session.execute.call_args.args[0]
+    assert isinstance(stmt, Update)
+    assert stmt.compile().params["status"] == "success"
     # SSE complete 不得因 commit 失败被跳过
     runner.log_broadcaster.publish.assert_any_await(
         "exec-1", {"type": "complete", "status": "success"}

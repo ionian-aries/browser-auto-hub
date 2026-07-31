@@ -31,3 +31,12 @@ class BasePipeline(ABC):
     @abstractmethod
     async def execute(self, config: dict, ctx: "ExecutionContext") -> PipelineResult:
         ...
+
+    @classmethod
+    def validate_config(cls, config: dict) -> str | None:
+        """触发边界预校验（API 触发 / 定时任务创建时由 backend 调用）。
+
+        返回错误信息字符串，None 为通过。默认放行——不实现的 pipeline 行为不变。
+        此为提前暴露入参错误的体验优化，execute 内的校验仍是最后防线。
+        """
+        return None

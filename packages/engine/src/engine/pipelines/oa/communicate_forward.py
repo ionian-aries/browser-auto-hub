@@ -15,7 +15,7 @@ from sqlalchemy import text
 
 from engine.base import BasePipeline, PipelineResult
 from engine.context import ExecutionContext
-from engine.pipelines.oa.shared.browser import oa_browser
+from engine.pipelines.shared.browser import managed_browser
 from engine.pipelines.oa.shared.login import LoginError, LoginTimeout, oa_login
 from engine.registry import register_pipeline
 from engine.table_names import resolve_table
@@ -114,7 +114,7 @@ class OaCommunicateForwardPipeline(BasePipeline):
         stats = {"total": len(forwards), "forwarded": 0, "skipped": 0, "failed": 0}
         errors: list[dict] = []
 
-        async with oa_browser(config) as page:
+        async with managed_browser(config) as page:
             try:
                 await ctx.logger.step("login", "登录 OA 系统")
                 await oa_login(page, config)

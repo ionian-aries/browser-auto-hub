@@ -1,0 +1,281 @@
+{
+  "sources": [
+    {
+      "source_name": "交通运输部",
+      "base_url": "https://www.mot.gov.cn",
+      "configs": {
+        "list": {
+          "fields": {
+            "container": "ul.news-list",
+            "item": "li.news-item",
+            "title": "span.news-title",
+            "date": "span.news-date",
+            "link": { "sel": "a.news-link", "attr": "href" }
+          }
+        },
+        "pagination": {
+          "fields": {
+            "next": "a:text('下一页')"
+          }
+        },
+        "detail": [
+          {
+            "fields": {
+              "content": "div.article-content",
+              "title": "h1.article-title",
+              "date": "span.publish-date",
+              "source": "span.source"
+            }
+          },
+          {
+            "fields": {
+              "content": "div#UCAP-CONTENT",
+              "title": "h1#ti",
+              "date": "div.pages-date",
+              "source": "div.pages-date span.font"
+            }
+          }
+        ]
+      },
+      "entries": [
+        {
+          "entry_name": "交通要闻",
+          "url": "https://www.mot.gov.cn/xinwen/jiaotongyaowen/index.html"
+        },
+        {
+          "entry_name": "图片新闻",
+          "url": "https://www.mot.gov.cn/xinwen/tupianxinwen/index.html",
+          "list": {
+            "fields": {
+              "container": "section.desktop-photo-grid-section .photo-grid",
+              "item": "div.photo-item",
+              "title": "h3.photo-title",
+              "date": "p.photo-date",
+              "link": { "sel": "a.photo-link", "attr": "href" }
+            }
+          }
+        },
+        {
+          "entry_name": "时政要闻",
+          "url": "https://www.mot.gov.cn/xinwen/shizhengyaowen/index.html"
+        }
+      ]
+    },
+    {
+      "source_name": "中央人民政府",
+      "base_url": "https://www.gov.cn",
+      "configs": {
+        "list": {
+          "fields": {
+            "container": "div.list ul",
+            "item": "li",
+            "title": "h4 a",
+            "date": "span.date",
+            "link": { "sel": "h4 a", "attr": "href" }
+          }
+        },
+        "pagination": {
+          "fields": {
+            "next": "a.pn-right"
+          }
+        },
+        "detail": [
+          {
+            "fields": {
+              "content": "div#UCAP-CONTENT",
+              "title": "h1#ti",
+              "date": "div.pages-date",
+              "source": "div.pages-date span.font"
+            }
+          }
+        ]
+      },
+      "entries": [
+        {
+          "entry_name": "要闻",
+          "url": "https://www.gov.cn/yaowen/liebiao/"
+        },
+        {
+          "entry_name": "最新政策",
+          "url": "https://www.gov.cn/zhengce/zuixin/"
+        }
+      ]
+    },
+    {
+      "source_name": "工信部",
+      "base_url": "https://www.miit.gov.cn",
+      "configs": {
+        "list": {
+          "fields": {
+            "container": ".page-content ul",
+            "item": "li",
+            "title": "a",
+            "date": "span.fr",
+            "link": { "sel": "a", "attr": "href" }
+          }
+        },
+        "pagination": {
+          "fields": {
+            "next": "a.layui-laypage-next"
+          }
+        },
+        "detail": [
+          {
+            "fields": {
+              "content": "#con_con",
+              "title": "h1#con_title",
+              "date": "span#con_time",
+              "source": ".cinfo span:last-child"
+            }
+          }
+        ]
+      },
+      "entries": [
+        {
+          "entry_name": "时政要闻",
+          "url": "https://www.miit.gov.cn/xwfb/szyw/index.html"
+        },
+        {
+          "entry_name": "工信动态",
+          "url": "https://www.miit.gov.cn/xwfb/gxdt/index.html"
+        },
+        {
+          "entry_name": "部领导活动",
+          "url": "https://www.miit.gov.cn/xwfb/bldhd/index.html"
+        },
+        {
+          "entry_name": "最新政策",
+          "url": "https://www.miit.gov.cn/xwfb/zxzc/index.html"
+        },
+        {
+          "entry_name": "媒体报道-文字报道",
+          "url": "https://www.miit.gov.cn/xwfb/mtbd/wzbd/index.html"
+        },
+        {
+          "entry_name": "工信数据-民用船舶",
+          "url": "https://www.miit.gov.cn/gxsj/tjfx/zbgy/mycb/index.html"
+        },
+        {
+          "entry_name": "国新办新闻发布会",
+          "url": "https://www.miit.gov.cn/xwfb/xwfbh/gxbxwfbh/index.html",
+          "list": {
+            "fields": {
+              "container": ".page-content ul",
+              "item": "li",
+              "title": "a",
+              "date": "span.list-time",
+              "link": { "sel": "a", "attr": "href" }
+            }
+          }
+        },
+        {
+          "entry_name": "国务院政策例行吹风会",
+          "url": "https://www.miit.gov.cn/xwfb/xwfbh/gwyzclxcfh/index.html",
+          "list": {
+            "fields": {
+              "container": ".page-content ul",
+              "item": "li",
+              "title": "a",
+              "date": "span.list-time",
+              "link": { "sel": "a", "attr": "href" }
+            }
+          }
+        },
+        {
+          "entry_name": "部新闻发布会",
+          "url": "https://www.miit.gov.cn/xwfb/xwfbh/bxwfbh/index.html",
+          "list": {
+            "fields": {
+              "container": ".page-content ul",
+              "item": "li",
+              "title": "a",
+              "date": "span.list-time",
+              "link": { "sel": "a", "attr": "href" }
+            }
+          }
+        },
+        {
+          "entry_name": "其他新闻发布会",
+          "url": "https://www.miit.gov.cn/xwfb/xwfbh/qtxwfbh/index.html",
+          "list": {
+            "fields": {
+              "container": ".page-content ul",
+              "item": "li",
+              "title": "a",
+              "date": "span.list-time",
+              "link": { "sel": "a", "attr": "href" }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "source_name": "发改委",
+      "base_url": "https://www.ndrc.gov.cn",
+      "configs": {
+        "list": {
+          "fields": {
+            "container": "ul.u-list",
+            "item": "li:not(.empty)",
+            "title": "a",
+            "date": "span",
+            "link": { "sel": "a", "attr": "href" }
+          }
+        },
+        "pagination": {
+          "fields": {
+            "next": "a:text('下一页')"
+          }
+        },
+        "detail": [
+          {
+            "fields": {
+              "content": ".article_con",
+              "title": "h2.article_title",
+              "date": ".shezhi .time",
+              "source": ".shezhi .ly span"
+            }
+          },
+          {
+            "fields": {
+              "content": "div#UCAP-CONTENT",
+              "title": "h1#ti",
+              "date": "div.pages-date",
+              "source": "div.pages-date span.font"
+            }
+          },
+          {
+            "fields": {
+              "content": "#detailContent",
+              "title": "h1",
+              "date": ".header-time",
+              "source": ".source"
+            }
+          }
+        ]
+      },
+      "entries": [
+        {
+          "entry_name": "新闻发布",
+          "url": "https://www.ndrc.gov.cn/xwdt/xwfb/"
+        },
+        {
+          "entry_name": "时政要闻",
+          "url": "https://www.ndrc.gov.cn/xwdt/szyw/"
+        },
+        {
+          "entry_name": "委领导动态",
+          "url": "https://www.ndrc.gov.cn/xwdt/dt/wlddt/"
+        },
+        {
+          "entry_name": "司局动态",
+          "url": "https://www.ndrc.gov.cn/xwdt/dt/sjdt/"
+        },
+        {
+          "entry_name": "地方动态",
+          "url": "https://www.ndrc.gov.cn/xwdt/dt/dfdt/"
+        }
+      ]
+    }
+  ]
+}

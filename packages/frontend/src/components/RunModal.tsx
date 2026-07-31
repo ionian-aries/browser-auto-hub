@@ -106,10 +106,12 @@ export interface RunModalProps {
   mode?: "now" | "schedule";
   /** 编辑模式：传入已有调度 */
   editSchedule?: Schedule | null;
+  /** 预填执行参数（执行记录「重新执行」入口）：覆盖在全局运行设置之上 */
+  initialConfig?: Record<string, unknown> | null;
 }
 
 /** 统一执行配置弹窗：立即执行与定时调度共用（spec 4 §4.5） */
-export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSchedule }: RunModalProps) {
+export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSchedule, initialConfig }: RunModalProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
@@ -237,7 +239,11 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
     initialValues = {
       pipeline_name: fixedPipeline?.name,
       exec_mode: mode === "schedule" ? "schedule" : "now",
-      config: { ...runSettingDefaults },
+      // 全局运行设置打底 → 预填配置覆盖（重新执行回显；array/object 序列化为 JSON 文本）
+      config: {
+        ...runSettingDefaults,
+        ...stringifyJsonFields(initialConfig ?? {}, schema),
+      },
       trigger_type: "cron",
       cron_preset: "daily",
       cron_time: dayjs("08:00", "HH:mm"),
@@ -314,7 +320,7 @@ export function RunModal({ open, onClose, pipeline: fixedPipeline, mode, editSch
               label: "流水线参数",
               forceRender: true,
               children: schema ? (
-                <SchemaFields schema={schema} namePrefix={["config"]} twoColumn seedDefaults={!isEdit} />
+                <SchemaFields schema={schema} namePrefix={["config"]} twoColumn seedDefaults={!isEdit && !initialConfig} />
               ) : (
                 <div style={{ color: "#999" }}>当前流水线无可配置参数</div>
               ),

@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Card, Col, Empty, Result, Row, Tag, message } from "antd";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { executionApi } from "../api/client";
+import { executionApi, pipelineApi } from "../api/client";
 import { statusColors, statusLabels, triggerLabels } from "../labels";
 import { durationSeconds, formatDuration } from "../utils/format";
+import { RunModal } from "../components/RunModal";
 import type { LogEntry } from "../types";
 
 const levelLabels: Record<string, string> = { all: "全部", info: "信息", warn: "警告", error: "错误" };
@@ -19,11 +20,30 @@ function getStepColor(step: string, map: Map<string, string>): string {
   return map.get(step)!;
 }
 
+/** message 中的 URL 渲染为可点击链接（保持 React 转义语义，不用 innerHTML） */
+const URL_RE = /(https?:\/\/[^\s]+)/g;
+
+function renderMessageWithLinks(message: string): React.ReactNode {
+  // split 带捕获组：奇数下标即为 URL 片段（避免用 /g regex 的 test 陷阱）
+  const parts = message.split(URL_RE);
+  if (parts.length === 1) return message;
+  return parts.map((part, i) =>
+    i % 2 === 1 ? (
+      <a key={i} href={part} target="_blank" rel="noopener noreferrer">
+        {part}
+      </a>
+    ) : (
+      part
+    )
+  );
+}
+
 export function ExecutionDetail() {
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [filter, setFilter] = useState<string>("all");
+  const [runOpen, setRunOpen] = useState(false);
   const [sseDropped, setSseDropped] = useState<"retrying" | "failed" | false>(false);
   // 耗时实时走秒：pending/running 期间本地 1s ticker（spec 4 §6.1）
   const [now, setNow] = useState(() => Date.now());
@@ -50,6 +70,27 @@ export function ExecutionDetail() {
       message.success("已取消");
     },
   });
+
+  // 重新执行：取流水线对象供 RunModal 固定流水线 + schema 渲染
+  const { data: pipeline } = useQuery({
+    queryKey: ["pipeline", execution?.pipeline_name],
+    queryFn: () => pipelineApi.get(execution!.pipeline_name!),
+    enabled: !!execution?.pipeline_name,
+  });
+
+  // id 切换（重新执行跳转新记录）时重置组件内状态：同路由复用组件实例，
+  // 不重置会残留旧日志、新 SSE 日志追加其后，看似"接续"
+  // 声明在日志 effect 之前，保证同一 commit 内先重置再连接
+  const prevIdRef = useRef(id);
+  useEffect(() => {
+    if (prevIdRef.current === id) return;
+    prevIdRef.current = id;
+    setLogs([]);
+    setFilter("all");
+    setSseDropped(false);
+    userScrolledRef.current = false;
+    stepColorMap.current.clear();
+  }, [id]);
 
   // SSE or load historical logs
   useEffect(() => {
@@ -153,10 +194,25 @@ export function ExecutionDetail() {
             {durationSec !== null && <span style={{ color: "#666", marginLeft: 8 }}>耗时 {formatDuration(durationSec)}</span>}
           </div>
         </div>
-        {(execution.status === "pending" || execution.status === "running") && (
-          <Button danger onClick={() => cancelMutation.mutate()}>取消执行</Button>
-        )}
+        <div>
+          {(execution.status === "pending" || execution.status === "running") ? (
+            <Button danger onClick={() => cancelMutation.mutate()}>取消执行</Button>
+          ) : (
+            <Button type="primary" disabled={!pipeline} onClick={() => setRunOpen(true)}>重新执行</Button>
+          )}
+        </div>
       </div>
+
+      {/* 重新执行：与流水线页同一执行配置弹窗，预填本次执行参数 */}
+      {pipeline && (
+        <RunModal
+          open={runOpen}
+          onClose={() => setRunOpen(false)}
+          pipeline={pipeline}
+          mode="now"
+          initialConfig={execution.config ?? null}
+        />
+      )}
 
       {/* Main content: left/right split */}
       <Row gutter={16} style={{ flex: 1, minHeight: 0 }}>
@@ -210,7 +266,9 @@ export function ExecutionDetail() {
                   {" "}
                   <span style={{ color: levelColors[log.level] }}>{levelIcons[log.level]}</span>
                   {" "}
-                  <span>{log.message}</span>
+                  <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+                    {renderMessageWithLinks(log.message)}
+                  </span>
                 </div>
               ))}
               <div ref={logEndRef} />
@@ -223,7 +281,8 @@ export function ExecutionDetail() {
           <div style={{ height: "100%", overflow: "auto" }}>
           {execution.status === "success" && execution.result_summary && (
             <Card title="执行结果" size="small" style={{ marginBottom: 12 }}>
-              <pre style={{ fontSize: 12, margin: 0 }}>
+              {/* pre 自持横向滚动：否则不换行的长行（如 URL）溢出到外层滚动容器，整个右栏横滚 */}
+              <pre style={{ fontSize: 12, margin: 0, overflowX: "auto" }}>
                 {JSON.stringify(execution.result_summary, null, 2)}
               </pre>
             </Card>
@@ -239,7 +298,7 @@ export function ExecutionDetail() {
 
           {execution.config && (
             <Card title="执行配置" size="small" style={{ marginBottom: 12 }}>
-              <pre style={{ fontSize: 12, margin: 0 }}>
+              <pre style={{ fontSize: 12, margin: 0, overflowX: "auto" }}>
                 {JSON.stringify(
                   Object.fromEntries(
                     Object.entries(execution.config).map(([k, v]) =>

@@ -2,7 +2,7 @@ import asyncio
 import traceback
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.config import get_settings
@@ -184,7 +184,7 @@ async def _run_execution(
             from backend.services.step_logger import DEBUG_LOG_DIR
             debug_path = DEBUG_LOG_DIR / f"{execution_id}.jsonl"
 
-        logger = DbStepLogger(execution_id, session, debug_path=debug_path)
+        logger = DbStepLogger(execution_id, session_factory, debug_path=debug_path)
 
         ctx = ExecutionContext(
             logger=logger,
@@ -218,7 +218,28 @@ async def _run_execution(
             )
         finally:
             execution.finished_at = datetime.now(timezone.utc)
+            final_status = execution.status
+            final_error = execution.error_message
+            final_summary = execution.result_summary
             try:
+                # cancel 端点用独立 session 抢先落 cancelled；本任务 ORM 副本是
+                # 运行前加载的旧状态，直接 commit 会把 cancelled 覆盖回终态
+                # （用户看到"取消后又变成功/失败"）。终态改条件 UPDATE：cancelled 优先。
+                # no_autoflush：否则 execute 前自动 flush ORM 脏字段，条件 UPDATE 形同虚设。
+                with session.no_autoflush:
+                    await session.execute(
+                        sql_update(TaskExecution)
+                        .where(TaskExecution.id == execution_id)
+                        .where(TaskExecution.status != "cancelled")
+                        .values(
+                            status=final_status,
+                            finished_at=execution.finished_at,
+                            error_message=final_error,
+                            result_summary=final_summary,
+                        )
+                    )
+                    # 同步 ORM 副本（refresh 覆盖脏字段），后续 commit 不再发无条件 UPDATE
+                    await session.refresh(execution)
                 await session.commit()
             except Exception:
                 # session 被 pipeline 污染时的兜底：换全新 session 落终态
@@ -226,10 +247,10 @@ async def _run_execution(
                 await _finalize_via_fresh_session(
                     session_factory,
                     execution_id,
-                    status=execution.status,
+                    status=final_status,
                     finished_at=execution.finished_at,
-                    error_message=execution.error_message,
-                    result_summary=execution.result_summary,
+                    error_message=final_error,
+                    result_summary=final_summary,
                 )
 
             # Retry on failure
@@ -258,19 +279,23 @@ async def _finalize_via_fresh_session(
     error_message: str | None,
     result_summary: dict | None,
 ) -> None:
-    """Best-effort 终态落库：主 session 已污染时用独立 session 写入。"""
+    """Best-effort 终态落库：主 session 已污染时用独立 session 写入。
+
+    与主路径同一规则：不覆盖 cancel 端点已写入的 cancelled。
+    """
     try:
         async with session_factory() as s:
-            result = await s.execute(
-                select(TaskExecution).where(TaskExecution.id == execution_id)
+            await s.execute(
+                sql_update(TaskExecution)
+                .where(TaskExecution.id == execution_id)
+                .where(TaskExecution.status != "cancelled")
+                .values(
+                    status=status,
+                    finished_at=finished_at,
+                    error_message=error_message,
+                    result_summary=result_summary,
+                )
             )
-            ex = result.scalar_one_or_none()
-            if ex is None:
-                return
-            ex.status = status
-            ex.finished_at = finished_at
-            ex.error_message = error_message
-            ex.result_summary = result_summary
             await s.commit()
     except Exception:
         pass  # 兜底失败已无更多手段，保证 SSE 通知不被阻断

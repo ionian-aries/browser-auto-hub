@@ -203,7 +203,7 @@ async def _fake_browser(config):
 
 
 def _patch_browser_and_login(monkeypatch, cf, counters):
-    monkeypatch.setattr(cf, "oa_browser", _fake_browser)
+    monkeypatch.setattr(cf, "managed_browser", _fake_browser)
 
     async def fake_login(page, config):
         counters["login"] = counters.get("login", 0) + 1
@@ -221,7 +221,7 @@ async def test_execute_validation_failure_no_browser(monkeypatch):
         entered.append(1)
         yield object()
 
-    monkeypatch.setattr(cf, "oa_browser", tracking_browser)
+    monkeypatch.setattr(cf, "managed_browser", tracking_browser)
     pipeline = cf.OaCommunicateForwardPipeline()
     result = await pipeline.execute({"forwards": []}, FakeExecCtx())
     assert result.success is False
@@ -280,7 +280,7 @@ async def _async(value):
 @pytest.mark.asyncio
 async def test_execute_login_failure_aborts(monkeypatch):
     cf = _load()
-    monkeypatch.setattr(cf, "oa_browser", _fake_browser)
+    monkeypatch.setattr(cf, "managed_browser", _fake_browser)
 
     from engine.pipelines.oa.shared.login import LoginError
 

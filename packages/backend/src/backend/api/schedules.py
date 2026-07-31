@@ -40,6 +40,18 @@ def _to_utc_naive(dt: datetime | None) -> datetime | None:
     return dt
 
 
+def _validate_config_override(pipeline_name: str, config_override: dict | None) -> None:
+    """边界预校验：pipeline 声明 validate_config 钩子时先行拦截非法 config_override，
+    避免垃圾配置落库后每次定时触发都失败（execute 内校验仍是最后防线）。"""
+    from engine.registry import PipelineRegistry
+
+    pipeline_cls = PipelineRegistry.get(pipeline_name)
+    if pipeline_cls is not None:
+        err = pipeline_cls.validate_config(config_override or {})
+        if err:
+            raise HTTPException(422, f"配置校验失败: {err}")
+
+
 def _validate_trigger(trigger_type: str, cron_expr, interval_seconds, run_at) -> None:
     if trigger_type == "cron" and not cron_expr:
         raise HTTPException(400, "cron 触发必须提供 cron 表达式")
@@ -104,6 +116,7 @@ async def create_schedule(
         raise HTTPException(404, f"Pipeline '{body.pipeline_id}' not found")
 
     _validate_trigger(body.trigger_type, body.cron_expr, body.interval_seconds, body.run_at)
+    _validate_config_override(pipeline.name, body.config_override)
 
     schedule = Schedule(
         pipeline_id=pipeline.id,
@@ -155,6 +168,13 @@ async def update_schedule(
         schedule.interval_seconds,
         schedule.run_at,
     )
+    # PUT 可能同时改 pipeline_id 与 config_override，按最终归属 pipeline 校验合并结果
+    result = await session.execute(
+        select(Pipeline).where(Pipeline.id == schedule.pipeline_id)
+    )
+    pipeline = result.scalar_one_or_none()
+    if pipeline is not None:
+        _validate_config_override(pipeline.name, schedule.config_override)
 
     await session.commit()
     await session.refresh(schedule)

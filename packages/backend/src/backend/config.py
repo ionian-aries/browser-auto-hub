@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     public_base_url: str = "http://127.0.0.1:8900"
     cors_origins: str = "*"  # 逗号分隔；生产环境应收紧为具体域名
 
+    # LLM 服务（pipeline 筛选/摘要等判断任务；OpenAI 兼容接口）
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_coarse_model: str = ""  # 粗筛模型
+    llm_fine_model: str = ""    # 细筛模型
+
 
     model_config = {"env_file": str(ENV_PATH), "env_file_encoding": "utf-8", "extra": "ignore"}
 

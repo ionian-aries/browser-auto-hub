@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 
-from engine.pipelines.oa.shared import browser as browser_mod
+from engine.pipelines.shared import browser as browser_mod
 
 
 class FakePage:
@@ -45,7 +45,7 @@ class FakePw:
 
 
 class FakePwCM:
-    """Mock async_playwright()：实现 start()/stop() 契约（oa_browser 不再用作上下文管理器）。"""
+    """Mock async_playwright()：实现 start()/stop() 契约（managed_browser 不再用作上下文管理器）。"""
 
     def __init__(self, pw):
         self._pw = pw
@@ -61,48 +61,48 @@ def _patch(monkeypatch, browser):
 
 
 @pytest.mark.asyncio
-async def test_oa_browser_yields_page_and_closes(monkeypatch):
+async def test_managed_browser_yields_page_and_closes(monkeypatch):
     browser = FakeBrowser()
     _patch(monkeypatch, browser)
-    async with browser_mod.oa_browser({}) as page:
+    async with browser_mod.managed_browser({}) as page:
         assert isinstance(page, FakePage)
         assert not browser.closed
     assert browser.closed
 
 
 @pytest.mark.asyncio
-async def test_oa_browser_headless_config(monkeypatch):
+async def test_managed_browser_headless_config(monkeypatch):
     browser = FakeBrowser()
     pw = _patch(monkeypatch, browser)
-    async with browser_mod.oa_browser({"headless": False}):
+    async with browser_mod.managed_browser({"headless": False}):
         pass
     assert pw.chromium.launch_kwargs == {"headless": False}
 
 
 @pytest.mark.asyncio
-async def test_oa_browser_default_headless(monkeypatch):
+async def test_managed_browser_default_headless(monkeypatch):
     browser = FakeBrowser()
     pw = _patch(monkeypatch, browser)
-    async with browser_mod.oa_browser({}):
+    async with browser_mod.managed_browser({}):
         pass
     assert pw.chromium.launch_kwargs == {"headless": True}
 
 
 @pytest.mark.asyncio
-async def test_oa_browser_closes_on_exception(monkeypatch):
+async def test_managed_browser_closes_on_exception(monkeypatch):
     browser = FakeBrowser()
     _patch(monkeypatch, browser)
     with pytest.raises(RuntimeError, match="boom"):
-        async with browser_mod.oa_browser({}):
+        async with browser_mod.managed_browser({}):
             raise RuntimeError("boom")
     assert browser.closed
 
 
 @pytest.mark.asyncio
-async def test_oa_browser_close_browser_false(monkeypatch):
+async def test_managed_browser_close_browser_false(monkeypatch):
     browser = FakeBrowser()
     _patch(monkeypatch, browser)
-    async with browser_mod.oa_browser({"close_browser": False}):
+    async with browser_mod.managed_browser({"close_browser": False}):
         pass
     assert not browser.closed
 
@@ -119,13 +119,13 @@ class SlowCloseBrowser(FakeBrowser):
 
 
 @pytest.mark.asyncio
-async def test_oa_browser_close_survives_double_cancel(monkeypatch):
+async def test_managed_browser_close_survives_double_cancel(monkeypatch):
     """超时取消后 close 进行中又遇手动 cancel：close 不得被打断（chromium 进程泄漏）。"""
     browser = SlowCloseBrowser()
     _patch(monkeypatch, browser)
 
     async def _use():
-        async with browser_mod.oa_browser({}):
+        async with browser_mod.managed_browser({}):
             await asyncio.sleep(60)
 
     task = asyncio.create_task(_use())

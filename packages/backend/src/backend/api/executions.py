@@ -36,6 +36,16 @@ async def create_execution(
     if pipeline.status != "active":
         raise HTTPException(400, "流水线已停用，无法触发执行")
 
+    # 边界预校验：pipeline 声明 validate_config 钩子时先行拦截非法入参，
+    # 避免「201 → 异步 failed」的延迟反馈与垃圾执行记录（execute 内校验仍是最后防线）
+    from engine.registry import PipelineRegistry
+
+    pipeline_cls = PipelineRegistry.get(pipeline.name)
+    if pipeline_cls is not None:
+        config_err = pipeline_cls.validate_config(body.config or {})
+        if config_err:
+            raise HTTPException(422, f"配置校验失败: {config_err}")
+
     execution = TaskExecution(
         pipeline_id=pipeline.id,
         trigger_type=body.trigger_type,
