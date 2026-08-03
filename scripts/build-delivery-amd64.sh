@@ -211,35 +211,33 @@ text = text.replace("logs backend", "logs bah-api")
 text = text.replace('ok "backend 已加入', 'ok "bah-api 已加入')
 text = text.replace('ok "backend 已在', 'ok "bah-api 已在')
 
-# 替换 _load_image 函数体（兼容旧版「只 load」与已打过补丁的版本）
+# 替换 _load_image：backend 走 docker load；frontend 一律 rootfs import
+# （客户机 Docker 20.10 上 frontend tar.gz 常 invalid diffID；load「成功」也可能未换掉旧层）
 new_load = r'''_load_image() {
     local tar="$1" name="$2"
     [ -f "$tar" ] || fail "镜像文件缺失: $tar"
-    if docker load -i "$tar"; then
-        ok "$name 已加载"
-        return 0
-    fi
 
-    # frontend 某些客户 Docker 20.10 + overlay2/xfs 环境下会在 docker load
-    # 阶段报 invalid diffID。兜底改用 docker export/rootfs + docker import，
-    # 避开分层镜像校验链路（与 Himea infra/docker deploy 思路一致）。
+    # frontend：强制 rootfs import，避免旧 Docker load 失败/假成功导致页面不更新
     if [ "$name" = "browser-auto-hub-frontend:latest" ]; then
         local rootfs="browser-auto-hub-frontend-rootfs.tar"
-        [ -f "$rootfs" ] || fail "frontend load 失败，且缺少 rootfs 兜底文件: $rootfs"
-        warn "frontend docker load 失败，改用 rootfs import 兜底"
-        docker import \\
-          --change 'ENTRYPOINT ["/docker-entrypoint.sh"]' \\
-          --change 'CMD ["nginx","-g","daemon off;"]' \\
-          --change 'EXPOSE 80' \\
-          "$rootfs" browser-auto-hub-frontend:latest >/dev/null
+        [ -f "$rootfs" ] || fail "缺少 frontend rootfs: $rootfs"
+        docker rmi "$name" >/dev/null 2>&1 || true
+        docker import \
+          --change 'ENTRYPOINT ["/docker-entrypoint.sh"]' \
+          --change 'CMD ["nginx","-g","daemon off;"]' \
+          --change 'EXPOSE 80' \
+          "$rootfs" "$name" >/dev/null
         ok "$name 已通过 rootfs import 导入"
         return 0
     fi
 
+    if docker load -i "$tar"; then
+        ok "$name 已加载"
+        return 0
+    fi
     fail "$name 导入失败"
 }'''
 
-# 匹配从 _load_image() { 到紧随其后的第一个 _load_image 调用之前
 pat = re.compile(
     r"_load_image\(\)\s*\{.*?\n\}\n(?=_load_image browser-auto-hub-backend)",
     re.DOTALL,
@@ -247,7 +245,23 @@ pat = re.compile(
 if not pat.search(text):
     raise SystemExit("deploy.sh: 未能定位 _load_image 函数，请检查模板")
 text = pat.sub(new_load + "\n", text, count=1)
+
+# compose up 强制重建，避免 tag 未变时继续跑旧容器
+text = text.replace(
+    "_compose -f docker-compose.prod.yml --env-file .env.docker up -d\n",
+    "_compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans\n",
+)
+# 幂等：已带 force-recreate 则不再重复替换
+if "--force-recreate" not in text:
+    raise SystemExit("deploy.sh: 未能给 compose up 加上 --force-recreate")
+
 deploy.write_text(text, encoding="utf-8")
+# 校验补丁真的写进去了
+verify = deploy.read_text(encoding="utf-8")
+if "browser-auto-hub-frontend-rootfs.tar" not in verify or "rootfs import" not in verify:
+    raise SystemExit("deploy.sh patch 校验失败：未包含 frontend rootfs import")
+if "--force-recreate" not in verify:
+    raise SystemExit("deploy.sh patch 校验失败：未包含 --force-recreate")
 print(f"patched {deploy}")
 PY
 

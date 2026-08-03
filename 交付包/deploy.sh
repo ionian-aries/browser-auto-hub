@@ -220,8 +220,10 @@ fi
 # ── 业务表名（TABLE_ 前缀） ──
 _tbl_inbox=$(_env_val TABLE_inbox_documents)
 _tbl_inbox="${_tbl_inbox:-inbox_documents}"
+_tbl_ganghang=$(_env_val TABLE_ganghang_materials)
+_tbl_ganghang="${_tbl_ganghang:-ganghang_materials}"
 
-ok "业务表: ${_tbl_inbox}"
+ok "业务表: ${_tbl_inbox} / ${_tbl_ganghang}"
 
 # ── 端口 ──
 _backend_port=$(_env_val BACKEND_PORT)
@@ -237,27 +239,26 @@ step "加载 Docker 镜像"
 _load_image() {
     local tar="$1" name="$2"
     [ -f "$tar" ] || fail "镜像文件缺失: $tar"
-    if docker load -i "$tar"; then
-        ok "$name 已加载"
-        return 0
-    fi
 
-    # frontend 某些客户 Docker 20.10 + overlay2/xfs 环境下会在 docker load
-    # 阶段报 invalid diffID。兜底改用 docker export/rootfs + docker import，
-    # 避开分层镜像校验链路。
+    # frontend：青岛港 Docker 20.10 上 tar.gz load 常 invalid diffID / 假成功不换层。
+    # 一律走 rootfs import，并先删旧 tag，保证页面资产真正更新。
     if [ "$name" = "browser-auto-hub-frontend:latest" ]; then
         local rootfs="browser-auto-hub-frontend-rootfs.tar"
-        [ -f "$rootfs" ] || fail "frontend load 失败，且缺少 rootfs 兜底文件: $rootfs"
-        warn "frontend docker load 失败，改用 rootfs import 兜底"
+        [ -f "$rootfs" ] || fail "缺少 frontend rootfs: $rootfs（与 deploy.sh 同目录）"
+        docker rmi "$name" >/dev/null 2>&1 || true
         docker import \
           --change 'ENTRYPOINT ["/docker-entrypoint.sh"]' \
           --change 'CMD ["nginx","-g","daemon off;"]' \
           --change 'EXPOSE 80' \
-          "$rootfs" browser-auto-hub-frontend:latest >/dev/null
+          "$rootfs" "$name" >/dev/null
         ok "$name 已通过 rootfs import 导入"
         return 0
     fi
 
+    if docker load -i "$tar"; then
+        ok "$name 已加载"
+        return 0
+    fi
     fail "$name 导入失败"
 }
 _load_image browser-auto-hub-backend.tar.gz  "browser-auto-hub-backend:latest"
@@ -383,6 +384,36 @@ INBOX_SQL
 
 ok "业务表 ${_tbl_inbox} 就绪"
 
+# ── 港航素材表 DDL（表名动态，来自 TABLE_ganghang_materials；结构与在线库一致） ──
+_mysql <<GANGHANG_SQL
+USE \`$_db_name\`;
+
+CREATE TABLE IF NOT EXISTS \`$_tbl_ganghang\` (
+  \`id\` bigint NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+  \`category\` varchar(50) NOT NULL COMMENT '13个中文分类之一',
+  \`title\` varchar(500) NOT NULL COMMENT '原始标题',
+  \`content\` longtext NOT NULL COMMENT '正文全文',
+  \`digest\` text NOT NULL COMMENT '成稿正文',
+  \`insight\` text COMMENT '战略参考',
+  \`link_url\` varchar(1000) NOT NULL COMMENT '原文URL',
+  \`execution_id\` varchar(36) DEFAULT NULL COMMENT '最后写入的执行ID',
+  \`doc_date\` date NOT NULL COMMENT '发布日期',
+  \`website_name\` varchar(255) NOT NULL COMMENT '信源名称',
+  \`score\` decimal(3,1) DEFAULT NULL COMMENT '资讯类评分（固定类NULL）',
+  \`score_reason\` varchar(500) DEFAULT NULL COMMENT '评分理由（固定类NULL）',
+  \`created_at\` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`updated_at\` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后写入时间',
+  PRIMARY KEY (\`id\`),
+  UNIQUE KEY \`idx_link_url\` (\`link_url\`(255)),
+  KEY \`idx_category\` (\`category\`),
+  KEY \`idx_doc_date\` (\`doc_date\`),
+  KEY \`idx_website\` (\`website_name\`),
+  KEY \`idx_execution\` (\`execution_id\`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+GANGHANG_SQL
+
+ok "业务表 ${_tbl_ganghang} 就绪"
+
 # ══════════════════════════════════════════════════════
 # Step 3: MinIO 建桶（已存在则跳过）
 # ══════════════════════════════════════════════════════
@@ -409,24 +440,27 @@ fi
 # ══════════════════════════════════════════════════════
 step "启动服务（docker compose）"
 
-_compose -f docker-compose.prod.yml --env-file .env.docker up -d
+# --force-recreate：同 tag latest 换了镜像内容时，纯 up -d 可能继续跑旧容器
+_compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans
 ok "服务已启动"
 
-# DATABASE_URL / MINIO 使用 compose 服务名时，backend 必须加入同一网络才能解析
-_backend_cid=$(docker ps -qf "name=browser-auto-hub-bah-api" | head -1)
+# DATABASE_URL / MINIO 使用 compose 服务名时，API 容器必须加入同一网络才能解析
+# 兼容旧服务名 backend 与青岛港 bah-api
+_backend_cid=$(docker ps -qf "name=bah-api" | head -1)
+[ -z "$_backend_cid" ] && _backend_cid=$(docker ps -qf "name=browser-auto-hub-backend" | head -1)
 if [ -n "$_backend_cid" ]; then
     if [ -n "$_mysql_net" ]; then
         if docker network connect "$_mysql_net" "$_backend_cid" 2>/dev/null; then
-            ok "bah-api 已加入 MySQL 网络: ${_mysql_net}"
+            ok "bah-api/backend 已加入 MySQL 网络: ${_mysql_net}"
         else
-            ok "bah-api 已在 MySQL 网络 ${_mysql_net}（或无需重复连接）"
+            ok "bah-api/backend 已在 MySQL 网络 ${_mysql_net}（或无需重复连接）"
         fi
     fi
     if [ -n "$_minio_net" ] && [ "$_minio_net" != "$_mysql_net" ]; then
         if docker network connect "$_minio_net" "$_backend_cid" 2>/dev/null; then
-            ok "bah-api 已加入 MinIO 网络: ${_minio_net}"
+            ok "bah-api/backend 已加入 MinIO 网络: ${_minio_net}"
         else
-            ok "bah-api 已在 MinIO 网络 ${_minio_net}（或无需重复连接）"
+            ok "bah-api/backend 已在 MinIO 网络 ${_minio_net}（或无需重复连接）"
         fi
     fi
 fi
@@ -444,7 +478,7 @@ while ! curl -sf "http://localhost:${_backend_port}/api/pipelines" >/dev/null 2>
     _waited=$((_waited + 2))
     if [ $_waited -ge $_max_wait ]; then
         warn "后端在 ${_max_wait}s 内未就绪，请检查日志:"
-        warn "  docker-compose -f docker-compose.prod.yml logs bah-api"
+        warn "  docker compose -f docker-compose.prod.yml logs bah-api"
         warn "种子数据需后端启动后执行，请稍后重跑 deploy.sh"
         break
     fi
@@ -489,6 +523,51 @@ WHERE p.name = 'oa.communicate_todos'
       AND s.trigger_type = 'interval'
       AND s.interval_seconds = 600
   );
+
+-- 默认调度：每天 06:00（北京时间）采集前一日的港航信息。
+-- 时区换算（容器无 TZ 设置，APScheduler 与 today 解析均按 UTC）：
+--   北京 06:00 = UTC 前一天 22:00，故 cron_expr = '0 22 * * *'；
+--   触发瞬间 UTC 日历日（如 7-30）恰是北京刚结束的那一天（北京已是 7-31 06:00），
+--   因此 start/end 必须用 today（UTC 当日 = 北京昨天）——若照搬 08:00 版本的
+--   today-1，会解析成北京"前天"，系统性错一天。
+--   result_summary.period 显示的日期即北京"前一天"，核对语义不变。
+--   若容器日后设 TZ=Asia/Shanghai，需把 cron_expr 改为 '0 6 * * *'、start/end 改为 today-1。
+-- 采前一天而非当天 23 点：窗口完整闭合，23:00~24:00 发布的文章不会系统性遗漏；
+--   当天 0~6 点的文章次日作为"昨天"被采，T+1 内全部入库（月刊无时效压力）。
+-- sources 省略 = 全部信源：执行时刻展开为 sources.json 全量，后续新增信源自动纳入，免维护。
+-- 迁移：本任务由此前 08:00（UTC '0 0 * * *'）版本调整为 06:00；若旧调度已随先前
+--   部署入库，先删除避免双跑同一窗口（幂等，无旧行则无影响）。
+-- 幂等：已存在「同 pipeline + 同 cron_expr」的调度时不再插入。
+-- 重试：失败 10 分钟后自动重试 1 次（无人值守任务的网络抖动兜底）。
+DELETE s FROM schedules s
+JOIN pipelines p ON p.id = s.pipeline_id
+WHERE p.name = 'port_maritime_info.harvest'
+  AND s.trigger_type = 'cron'
+  AND s.cron_expr = '0 0 * * *';
+
+INSERT INTO schedules
+  (id, pipeline_id, name, trigger_type, cron_expr, config_override, enabled, max_retries, retry_delay_seconds)
+SELECT
+  UUID(),
+  p.id,
+  '每日06:00采集前一日港航信息',
+  'cron',
+  '0 22 * * *',
+  JSON_OBJECT(
+    'start_date', 'today',
+    'end_date', 'today'
+  ),
+  1,
+  1,
+  600
+FROM pipelines p
+WHERE p.name = 'port_maritime_info.harvest'
+  AND NOT EXISTS (
+    SELECT 1 FROM schedules s
+    WHERE s.pipeline_id = p.id
+      AND s.trigger_type = 'cron'
+      AND s.cron_expr = '0 22 * * *'
+  );
 SEED_SQL
 
     ok "种子数据写入完成"
@@ -505,6 +584,6 @@ echo
 echo "  后端 API:  http://localhost:${_backend_port}/api/pipelines"
 echo "  前端页面:  http://localhost:${_frontend_port}"
 echo
-echo "  查看日志:  docker-compose -f docker-compose.prod.yml logs -f"
-echo "  停止服务:  docker-compose -f docker-compose.prod.yml down"
-echo "  重启服务:  docker-compose -f docker-compose.prod.yml restart"
+echo "  查看日志:  docker compose -f docker-compose.prod.yml logs -f"
+echo "  停止服务:  docker compose -f docker-compose.prod.yml down"
+echo "  重启服务:  docker compose -f docker-compose.prod.yml restart"
