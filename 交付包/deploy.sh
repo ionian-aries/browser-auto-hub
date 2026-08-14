@@ -42,7 +42,8 @@ fi
 step "解析 .env.docker"
 
 # 辅助：从 .env.docker 读取变量值（跳过注释和空行）
-_env_val() { grep "^$1=" .env.docker | head -1 | cut -d= -f2-; }
+# 键不存在时返回空字符串，不可让 grep 的 exit 1 在 set -e/pipefail 下把整脚本打死
+_env_val() { grep "^$1=" .env.docker 2>/dev/null | head -1 | cut -d= -f2- || true; }
 
 # ── DATABASE_URL 解析 ──
 # 格式：mysql+aiomysql://user:pass@host:port/dbname?charset=utf8mb4
@@ -441,7 +442,10 @@ fi
 step "启动服务（docker compose）"
 
 # --force-recreate：同 tag latest 换了镜像内容时，纯 up -d 可能继续跑旧容器
-_compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans
+# 若失败（常见：宿主机 8080 已被 Higress 占用），把 compose 错误打出来再退出
+if ! _compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans; then
+    fail "docker compose up 失败。请检查端口是否冲突（勿与 Higress 抢 8080），并查看: docker compose -f docker-compose.prod.yml --env-file .env.docker ps -a"
+fi
 ok "服务已启动"
 
 # DATABASE_URL / MINIO 使用 compose 服务名时，API 容器必须加入同一网络才能解析
