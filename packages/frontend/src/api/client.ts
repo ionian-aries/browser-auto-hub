@@ -6,6 +6,7 @@ import type {
   LogEntry,
   Pipeline,
   Schedule,
+  Source,
   SystemInfo,
   SystemSettings,
 } from "../types";
@@ -80,4 +81,8 @@ export const systemApi = {
   getSettings: () => api.get<SystemSettings>("/system/settings").then((r) => r.data),
   updateSettings: (data: Partial<SystemSettings>) =>
     api.put("/system/settings", data).then((r) => r.data),
+};
+
+export const sourceApi = {
+  list: () => api.get<Source[]>("/sources").then((r) => r.data),
 };

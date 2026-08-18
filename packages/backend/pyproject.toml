@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "sqlalchemy[asyncio]>=2.0",
     "aiomysql>=0.2",
+    "cryptography>=42.0",
     "pydantic-settings>=2.0",
     "apscheduler>=4.0.0a5",
     "boto3>=1.34",

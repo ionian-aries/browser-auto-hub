@@ -8,6 +8,7 @@ import { PipelineDetail } from "./pages/PipelineDetail";
 import { Schedules } from "./pages/Schedules";
 import { Executions } from "./pages/Executions";
 import { ExecutionDetail } from "./pages/ExecutionDetail";
+import { Sources } from "./pages/Sources";
 import { Settings } from "./pages/Settings";
 
 const queryClient = new QueryClient();
@@ -24,6 +25,7 @@ export function App() {
             <Route path="/schedules" element={<Schedules />} />
             <Route path="/executions" element={<Executions />} />
             <Route path="/executions/:id" element={<ExecutionDetail />} />
+            <Route path="/sources" element={<Sources />} />
             <Route path="/settings" element={<Settings />} />
             <Route
               path="*"

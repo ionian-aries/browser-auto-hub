@@ -62,46 +62,6 @@
       ]
     },
     {
-      "source_name": "中央人民政府",
-      "base_url": "https://www.gov.cn",
-      "configs": {
-        "list": {
-          "fields": {
-            "container": "div.list ul",
-            "item": "li",
-            "title": "h4 a",
-            "date": "span.date",
-            "link": { "sel": "h4 a", "attr": "href" }
-          }
-        },
-        "pagination": {
-          "fields": {
-            "next": "a.pn-right"
-          }
-        },
-        "detail": [
-          {
-            "fields": {
-              "content": "div#UCAP-CONTENT",
-              "title": "h1#ti",
-              "date": "div.pages-date",
-              "source": "div.pages-date span.font"
-            }
-          }
-        ]
-      },
-      "entries": [
-        {
-          "entry_name": "要闻",
-          "url": "https://www.gov.cn/yaowen/liebiao/"
-        },
-        {
-          "entry_name": "最新政策",
-          "url": "https://www.gov.cn/zhengce/zuixin/"
-        }
-      ]
-    },
-    {
       "source_name": "工信部",
       "base_url": "https://www.miit.gov.cn",
       "configs": {
@@ -206,74 +166,6 @@
               "link": { "sel": "a", "attr": "href" }
             }
           }
-        }
-      ]
-    },
-    {
-      "source_name": "发改委",
-      "base_url": "https://www.ndrc.gov.cn",
-      "configs": {
-        "list": {
-          "fields": {
-            "container": "ul.u-list",
-            "item": "li:not(.empty)",
-            "title": "a",
-            "date": "span",
-            "link": { "sel": "a", "attr": "href" }
-          }
-        },
-        "pagination": {
-          "fields": {
-            "next": "a:text('下一页')"
-          }
-        },
-        "detail": [
-          {
-            "fields": {
-              "content": ".article_con",
-              "title": "h2.article_title",
-              "date": ".shezhi .time",
-              "source": ".shezhi .ly span"
-            }
-          },
-          {
-            "fields": {
-              "content": "div#UCAP-CONTENT",
-              "title": "h1#ti",
-              "date": "div.pages-date",
-              "source": "div.pages-date span.font"
-            }
-          },
-          {
-            "fields": {
-              "content": "#detailContent",
-              "title": "h1",
-              "date": ".header-time",
-              "source": ".source"
-            }
-          }
-        ]
-      },
-      "entries": [
-        {
-          "entry_name": "新闻发布",
-          "url": "https://www.ndrc.gov.cn/xwdt/xwfb/"
-        },
-        {
-          "entry_name": "时政要闻",
-          "url": "https://www.ndrc.gov.cn/xwdt/szyw/"
-        },
-        {
-          "entry_name": "委领导动态",
-          "url": "https://www.ndrc.gov.cn/xwdt/dt/wlddt/"
-        },
-        {
-          "entry_name": "司局动态",
-          "url": "https://www.ndrc.gov.cn/xwdt/dt/sjdt/"
-        },
-        {
-          "entry_name": "地方动态",
-          "url": "https://www.ndrc.gov.cn/xwdt/dt/dfdt/"
         }
       ]
     }

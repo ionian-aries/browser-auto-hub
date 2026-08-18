@@ -80,3 +80,21 @@ export interface SystemSettings {
   run_default_max_retries: number;
   run_default_retry_delay_seconds: number;
 }
+
+export interface SourceEntry {
+  entry_name: string;
+  url: string;
+  has_override: boolean;
+}
+
+export interface Source {
+  source_name: string;
+  base_url: string;
+  entry_count: number;
+  entries: SourceEntry[];
+  list_fields: string[];
+  detail_fields: string[];
+  detail_variant_count: number;
+  has_pagination: boolean;
+  entries_with_override: number;
+}

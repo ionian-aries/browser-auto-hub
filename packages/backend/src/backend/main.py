@@ -7,6 +7,7 @@ from backend.api.executions import router as executions_router
 from backend.api.files import router as files_router
 from backend.api.pipelines import router as pipelines_router
 from backend.api.schedules import router as schedules_router
+from backend.api.sources import router as sources_router
 from backend.api.system import router as system_router
 from backend.config import get_settings
 from backend.database import get_engine, get_session_factory
@@ -56,4 +57,5 @@ app.include_router(system_router)
 app.include_router(pipelines_router)
 app.include_router(schedules_router)
 app.include_router(executions_router)
+app.include_router(sources_router)
 app.include_router(files_router)
