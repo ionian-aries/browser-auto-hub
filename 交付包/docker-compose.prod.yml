@@ -1,0 +1,48 @@
+# 离线部署 compose：使用预构建镜像（非 build），适用于交付包部署场景。
+# 镜像通过 deploy.sh 从 tar.gz 加载，tag 固定 latest。
+# 环境变量由 .env.docker 提供（deploy.sh 自动指定 --env-file）。
+#
+# 青岛港 RHEL7 已验证：bah-web 必须 security_opt（seccomp/SELinux），
+# 仅 tmpfs 不能消除 nginx 1.31 pwrite(pid) EPERM。
+name: browser-auto-hub
+services:
+  bah-api:
+    image: browser-auto-hub-backend:latest
+    env_file: .env.docker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "www.gov.cn:221.204.95.143"
+      - "www.ndrc.gov.cn:183.201.232.25"
+      - "www.mot.gov.cn:120.220.60.2"
+    ports:
+      - "${BACKEND_PORT:-8901}:8900"
+      - "10080:8900"
+    shm_size: 2gb
+    restart: unless-stopped
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8
+
+  bah-web:
+    image: browser-auto-hub-frontend:latest
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "www.gov.cn:221.204.95.143"
+      - "www.ndrc.gov.cn:183.201.232.25"
+      - "www.mot.gov.cn:120.220.60.2"
+    security_opt:
+      - seccomp:unconfined
+      - label:disable
+    tmpfs:
+      - /run
+      - /tmp
+      - /var/cache/nginx
+    ports:
+      - "${FRONTEND_PORT:-3201}:80"
+      - "8080:80"
+    depends_on:
+      - bah-api
+    restart: unless-stopped
+    dns:
+      - 223.5.5.5
+      - 8.8.8.8

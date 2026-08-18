@@ -20,6 +20,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC
 step() { echo -e "\n${CYAN}▸ $1${NC}"; }
 ok()   { echo -e "${GREEN}  ✓ $1${NC}"; }
 warn() { echo -e "${YELLOW}  ⚠ $1${NC}"; }
+log()  { warn "$1"; }
 fail() { echo -e "${RED}  ✗ $1${NC}"; exit 1; }
 
 cd "$(dirname "$0")"
@@ -42,7 +43,6 @@ fi
 step "解析 .env.docker"
 
 # 辅助：从 .env.docker 读取变量值（跳过注释和空行）
-# 键不存在时返回空字符串，不可让 grep 的 exit 1 在 set -e/pipefail 下把整脚本打死
 _env_val() { grep "^$1=" .env.docker 2>/dev/null | head -1 | cut -d= -f2- || true; }
 
 # ── DATABASE_URL 解析 ──
@@ -64,49 +64,6 @@ _db_port="${_db_hostport##*:}"              # port（若 hostport 无 :，则等
 
 ok "MySQL: ${_db_user}@${_db_host}:${_db_port}/${_db_name}"
 
-# ── 是否为 Docker Compose 服务名（需加入同一网络才能解析）──
-_needs_docker_dns() {
-    local host="$1"
-    case "$host" in
-        ""|localhost|127.0.0.1|host.docker.internal) return 1 ;;
-    esac
-    [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 1
-    return 0
-}
-
-# 按服务主机名找到运行中容器所在 Docker 网络（优先带该别名的网络）
-_docker_net_for_service() {
-    local svc="$1"
-    local cid=""
-
-    cid=$(docker ps --format '{{.ID}}\t{{.Names}}' | awk -F'\t' -v s="$svc" '
-        $2 == s { print $1; exit }
-        index($2, s) { print $1; exit }
-    ')
-
-    if [ -z "$cid" ]; then
-        case "$svc" in
-            mysql)
-                cid=$(docker ps --format '{{.ID}}\t{{.Image}}' | awk -F'\t' '$2 ~ /(^|\/)mysql([:]|$)/ { print $1; exit }')
-                ;;
-            minio)
-                cid=$(docker ps --format '{{.ID}}\t{{.Image}}' | awk -F'\t' '$2 ~ /(^|\/)minio\// || $2 ~ /(^|\/)minio([:]|$)/ { print $1; exit }')
-                ;;
-        esac
-    fi
-
-    [ -n "$cid" ] || return 1
-
-    local net=""
-    net=$(docker inspect -f '{{range $name, $conf := .NetworkSettings.Networks}}{{range $conf.Aliases}}{{println $name " " .}}{{end}}{{end}}' "$cid" 2>/dev/null \
-        | awk -v s="$svc" '$2 == s { print $1; exit }')
-    if [ -z "$net" ]; then
-        net=$(docker inspect -f '{{range $name, $conf := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$cid" | head -1)
-    fi
-    [ -n "$net" ] || return 1
-    printf '%s' "$net"
-}
-
 # ── 部署机 MySQL 连接地址 ──
 # DATABASE_URL 中的 host.docker.internal 是 Docker 容器内使用的地址；
 # deploy.sh 运行在宿主机上，需替换为 127.0.0.1（同一台机器的 MySQL）
@@ -117,45 +74,30 @@ else
     _deploy_db_host="$_db_host"
 fi
 
-_mysql_net=""
-if _needs_docker_dns "$_db_host"; then
-    _mysql_net=$(_docker_net_for_service "$_db_host") \
-        || fail "无法找到服务 '${_db_host}' 所在 Docker 网络。请确认 MySQL 容器已运行，或把 DATABASE_URL 主机改为可达 IP"
-    ok "MySQL Docker 网络: ${_mysql_net}（用于解析 ${_db_host}）"
-fi
-
-# ── mysql 客户端（本地优先；服务名主机则必须走 Docker + 同网络）──
+# ── mysql 客户端（本地优先 → 运行中容器 exec → docker run 兜底） ──
 # --default-character-set=utf8mb4：防止中文被 latin1 双重编码
-if command -v mysql >/dev/null 2>&1 && [ -z "$_mysql_net" ]; then
+if command -v mysql >/dev/null 2>&1; then
     _mysql() { mysql --default-character-set=utf8mb4 -h"$_deploy_db_host" -P"$_db_port" -u"$_db_user" -p"$_db_pass" "$@"; }
 else
-    # 离线环境优先复用本机已有 mysql 镜像（客户常见 mysql:8.4），避免硬编码 8.0 拉不到
-    _mysql_img=""
-    for _cand in mysql:8.4 mysql:8.0 mysql:latest mysql; do
-        if docker image inspect "$_cand" >/dev/null 2>&1; then
-            _mysql_img="$_cand"
-            break
-        fi
-    done
-    if [ -z "$_mysql_img" ]; then
-        docker pull mysql:8.0 >/dev/null 2>&1 || true
-        if docker image inspect mysql:8.0 >/dev/null 2>&1; then
-            _mysql_img="mysql:8.0"
-        else
-            fail "本地无 mysql 客户端，且无可用 mysql 镜像（如 mysql:8.4 / mysql:8.0）。请安装 mysql 客户端，或 docker load / tag 一张 mysql 镜像后重试"
-        fi
-    fi
-    if [ -n "$_mysql_net" ]; then
-        warn "使用 Docker 内 ${_mysql_img} 执行 DDL（--network ${_mysql_net}）"
+    # 离线环境优先 docker exec 进运行中的 mysql 容器（镜像已自带 mysql 客户端）
+    _mysql_cid=$(docker ps --format '{{.ID}} {{.Image}} {{.Names}}' 2>/dev/null | awk '$2 ~ /mysql/ || $3 ~ /mysql/ {print $1; exit}')
+    if [ -n "$_mysql_cid" ]; then
+        _mysql_cname=$(docker inspect --format '{{.Name}}' "$_mysql_cid" 2>/dev/null | sed 's|^/||')
+        ok "本地 mysql 客户端未安装，通过运行中容器执行 DDL: $_mysql_cname"
+        _mysql() {
+            docker exec -i "$_mysql_cid" mysql --default-character-set=utf8mb4 \
+                -h127.0.0.1 -P"$_db_port" -u"$_db_user" -p"$_db_pass" "$@"
+        }
     else
-        warn "本地 mysql 客户端未安装，使用 Docker 内 ${_mysql_img} 执行 DDL"
+        warn "本地 mysql 客户端未安装且未发现 mysql 容器，回退 docker run mysql:8.0（离线需预载镜像）"
+        docker pull mysql:8.0 >/dev/null 2>&1 || true
+        _mysql() {
+            docker run --rm -i \
+                --add-host host.docker.internal:host-gateway \
+                mysql:8.0 mysql --default-character-set=utf8mb4 \
+                -h"$_db_host" -P"$_db_port" -u"$_db_user" -p"$_db_pass" "$@"
+        }
     fi
-    _mysql() {
-        local _args=(--rm -i --add-host "host.docker.internal:host-gateway")
-        [ -n "$_mysql_net" ] && _args+=(--network "$_mysql_net")
-        docker run "${_args[@]}" "$_mysql_img" mysql --default-character-set=utf8mb4 \
-            -h"$_db_host" -P"$_db_port" -u"$_db_user" -p"$_db_pass" "$@"
-    }
 fi
 
 # ── MinIO ──
@@ -170,51 +112,29 @@ _minio_bucket="${_minio_bucket:-browser-auto-hub}"
 
 ok "MinIO: ${_minio_endpoint} → ${_minio_bucket}"
 
-# 从 endpoint 解析主机名（http://minio:9000 → minio）
-_minio_host=$(printf '%s' "$_minio_endpoint" | sed -E 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||; s|[:/].*||')
-_minio_net=""
-if _needs_docker_dns "$_minio_host"; then
-    _minio_net=$(_docker_net_for_service "$_minio_host") \
-        || fail "无法找到服务 '${_minio_host}' 所在 Docker 网络。请确认 MinIO 容器已运行，或把 MINIO_ENDPOINT 改为可达地址"
-    ok "MinIO Docker 网络: ${_minio_net}（用于解析 ${_minio_host}）"
-fi
-
-# ── mc 客户端（本地优先，回退到 Docker 内执行；都没有则跳过建桶）──
+# ── mc 客户端（本地优先 → docker run（需镜像已缓存）→ 跳过） ──
 _mc_docker_mode=0
-_mc_available=0
-if command -v mc >/dev/null 2>&1 && [ -z "$_minio_net" ]; then
+_mc_skip=0
+if command -v mc >/dev/null 2>&1; then
     _mc() { mc "$@"; }
-    _mc_available=1
 else
-    _mc_img=""
-    for _cand in minio/mc minio/mc:latest; do
-        if docker image inspect "$_cand" >/dev/null 2>&1; then
-            _mc_img="$_cand"
-            break
-        fi
-    done
-    if [ -z "$_mc_img" ]; then
-        docker pull minio/mc >/dev/null 2>&1 || true
-        if docker image inspect minio/mc >/dev/null 2>&1; then
-            _mc_img="minio/mc"
-        fi
-    fi
-    if [ -n "$_mc_img" ]; then
-        warn "本地 mc 未安装，使用 Docker 内 ${_mc_img} 执行"
-        # MinIO endpoint 中的 127.0.0.1/localhost 在容器内不可达，替换为 host.docker.internal
+    # 离线环境：先看 minio/mc 镜像是否已缓存（Himea 部署通常已拉取）
+    if docker image inspect minio/mc:latest >/dev/null 2>&1; then
+        warn "本地 mc 未安装，使用已缓存的 minio/mc 镜像执行"
         _mc_endpoint_for_docker="$_minio_endpoint"
         _mc_endpoint_for_docker="${_mc_endpoint_for_docker//127.0.0.1/host.docker.internal}"
         _mc_endpoint_for_docker="${_mc_endpoint_for_docker//localhost/host.docker.internal}"
-        # 每次调用先 alias set 再执行实际操作（每次 docker run 是独立容器，alias 不持久化）
         _mc() {
-            local _args=(--rm -i --add-host "host.docker.internal:host-gateway" --entrypoint sh)
-            [ -n "$_minio_net" ] && _args+=(--network "$_minio_net")
-            docker run "${_args[@]}" "$_mc_img" -c "mc alias set deploy '${_mc_endpoint_for_docker}' '${_minio_ak}' '${_minio_sk}' >/dev/null && mc $*"
+            docker run --rm -i \
+                --add-host host.docker.internal:host-gateway \
+                --entrypoint sh \
+                minio/mc -c "mc alias set deploy '${_mc_endpoint_for_docker}' '${_minio_ak}' '${_minio_sk}' >/dev/null && mc $*"
         }
         _mc_docker_mode=1
-        _mc_available=1
     else
-        warn "本地无 mc 且无 minio/mc 镜像，跳过自动建桶（请确认桶 ${_minio_bucket} 已在 MinIO 中创建）"
+        warn "minio/mc 镜像未缓存且本地无 mc 客户端，跳过桶操作（若桶已存在则无影响）"
+        _mc() { return 0; }
+        _mc_skip=1
     fi
 fi
 
@@ -241,26 +161,28 @@ _load_image() {
     local tar="$1" name="$2"
     [ -f "$tar" ] || fail "镜像文件缺失: $tar"
 
-    # frontend：青岛港 Docker 20.10 上 tar.gz load 常 invalid diffID / 假成功不换层。
-    # 一律走 rootfs import，并先删旧 tag，保证页面资产真正更新。
+    # frontend：优先 docker load（保留镜像元数据/SELinux 标签）
+    # 仅当 load 失败（旧 Docker invalid diffID）时回退 rootfs import
     if [ "$name" = "browser-auto-hub-frontend:latest" ]; then
+        docker rmi "$name" >/dev/null 2>&1 || true
+        if docker load -i "$tar"; then
+            ok "$name 已通过 docker load 加载"
+            return 0
+        fi
+        log "$name docker load 失败，回退 rootfs import（注意：可能丢失 SELinux 标签）"
         local rootfs="browser-auto-hub-frontend-rootfs.tar"
-        [ -f "$rootfs" ] || fail "缺少 frontend rootfs: $rootfs（与 deploy.sh 同目录）"
+        [ -f "$rootfs" ] || fail "缺少 frontend rootfs: $rootfs"
         docker rmi "$name" >/dev/null 2>&1 || true
         docker import \
           --change 'ENTRYPOINT ["/docker-entrypoint.sh"]' \
           --change 'CMD ["nginx","-g","daemon off;"]' \
           --change 'EXPOSE 80' \
           "$rootfs" "$name" >/dev/null
-        ok "$name 已通过 rootfs import 导入"
+        ok "$name 已通过 rootfs import 导入（兜底）"
         return 0
     fi
 
-    if docker load -i "$tar"; then
-        ok "$name 已加载"
-        return 0
-    fi
-    fail "$name 导入失败"
+    docker load -i "$tar" && ok "$name 已加载" || fail "$name 导入失败"
 }
 _load_image browser-auto-hub-backend.tar.gz  "browser-auto-hub-backend:latest"
 _load_image browser-auto-hub-frontend.tar.gz "browser-auto-hub-frontend:latest"
@@ -420,20 +342,16 @@ ok "业务表 ${_tbl_ganghang} 就绪"
 # ══════════════════════════════════════════════════════
 step "MinIO 桶检查"
 
-if [ "$_mc_available" != "1" ]; then
-    warn "跳过建桶检查，请确认 MinIO 中已有桶: ${_minio_bucket}"
-else
-    # 本地模式需先设 alias（Docker 模式已在 _mc 函数内部完成）
-    if [ "$_mc_docker_mode" = "0" ]; then
-        _mc alias set deploy "$_minio_endpoint" "$_minio_ak" "$_minio_sk" >/dev/null 2>&1 || true
-    fi
+# 本地模式需先设 alias（Docker 模式已在 _mc 函数内部完成）
+if [ "$_mc_docker_mode" = "0" ]; then
+    _mc alias set deploy "$_minio_endpoint" "$_minio_ak" "$_minio_sk" >/dev/null 2>&1 || true
+fi
 
-    if _mc ls "deploy/$_minio_bucket" >/dev/null 2>&1; then
-        ok "桶 $_minio_bucket 已存在，跳过"
-    else
-        _mc mb "deploy/$_minio_bucket" 2>&1
-        ok "桶 $_minio_bucket 已创建"
-    fi
+if _mc ls "deploy/$_minio_bucket" >/dev/null 2>&1; then
+    ok "桶 $_minio_bucket 已存在，跳过"
+else
+    _mc mb "deploy/$_minio_bucket" 2>&1
+    ok "桶 $_minio_bucket 已创建"
 fi
 
 # ══════════════════════════════════════════════════════
@@ -441,30 +359,70 @@ fi
 # ══════════════════════════════════════════════════════
 step "启动服务（docker compose）"
 
-# --force-recreate：同 tag latest 换了镜像内容时，纯 up -d 可能继续跑旧容器
-# 若失败（常见：宿主机 8080 已被 Higress 占用），把 compose 错误打出来再退出
-if ! _compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans; then
-    fail "docker compose up 失败。请检查端口是否冲突（勿与 Higress 抢 8080），并查看: docker compose -f docker-compose.prod.yml --env-file .env.docker ps -a"
-fi
+_compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans
 ok "服务已启动"
 
-# DATABASE_URL / MINIO 使用 compose 服务名时，API 容器必须加入同一网络才能解析
-# 兼容旧服务名 backend 与青岛港 bah-api
-_backend_cid=$(docker ps -qf "name=bah-api" | head -1)
-[ -z "$_backend_cid" ] && _backend_cid=$(docker ps -qf "name=browser-auto-hub-backend" | head -1)
+# DATABASE_URL / MINIO 使用 compose 服务名（如 mysql / minio）时，
+# bah-api 必须加入 Himea 同一 Docker 网络，否则报 Name or service not known
+_needs_docker_dns() {
+    local host="$1"
+    case "$host" in
+        ""|localhost|127.0.0.1|host.docker.internal) return 1 ;;
+    esac
+    [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 1
+    return 0
+}
+
+_docker_net_for_service() {
+    local svc="$1"
+    local cid=""
+    cid=$(docker ps --format '{{.ID}}\t{{.Names}}' | awk -F'\t' -v s="$svc" '
+        $2 == s { print $1; exit }
+        index($2, s) { print $1; exit }
+    ')
+    if [ -z "$cid" ]; then
+        case "$svc" in
+            mysql)
+                cid=$(docker ps --format '{{.ID}}\t{{.Image}}' | awk -F'\t' '$2 ~ /(^|\/)mysql([:]|$)/ { print $1; exit }')
+                ;;
+            minio)
+                cid=$(docker ps --format '{{.ID}}\t{{.Image}}' | awk -F'\t' '$2 ~ /(^|\/)minio\// || $2 ~ /(^|\/)minio([:]|$)/ { print $1; exit }')
+                ;;
+        esac
+    fi
+    [ -n "$cid" ] || return 1
+    local net=""
+    net=$(docker inspect -f '{{range $name, $conf := .NetworkSettings.Networks}}{{range $conf.Aliases}}{{println $name " " .}}{{end}}{{end}}' "$cid" 2>/dev/null \
+        | awk -v s="$svc" '$2 == s { print $1; exit }')
+    if [ -z "$net" ]; then
+        net=$(docker inspect -f '{{range $name, $conf := .NetworkSettings.Networks}}{{println $name}}{{end}}' "$cid" | head -1)
+    fi
+    [ -n "$net" ] || return 1
+    printf '%s' "$net"
+}
+
+_backend_cid=$(docker ps -qf "name=browser-auto-hub-bah-api" | head -1)
+[ -z "$_backend_cid" ] && _backend_cid=$(docker ps -qf "name=bah-api" | head -1)
 if [ -n "$_backend_cid" ]; then
-    if [ -n "$_mysql_net" ]; then
-        if docker network connect "$_mysql_net" "$_backend_cid" 2>/dev/null; then
-            ok "bah-api/backend 已加入 MySQL 网络: ${_mysql_net}"
+    if _needs_docker_dns "$_db_host"; then
+        _mysql_net=$(_docker_net_for_service "$_db_host") || _mysql_net=""
+        if [ -n "$_mysql_net" ]; then
+            docker network connect "$_mysql_net" "$_backend_cid" 2>/dev/null \
+                && ok "bah-api 已加入 MySQL 网络: ${_mysql_net}" \
+                || ok "bah-api 已在 MySQL 网络 ${_mysql_net}"
+            docker restart "$_backend_cid" >/dev/null
+            ok "已重启 bah-api 以应用网络"
         else
-            ok "bah-api/backend 已在 MySQL 网络 ${_mysql_net}（或无需重复连接）"
+            warn "找不到服务 '${_db_host}' 所在 Docker 网络，bah-api 可能无法解析该主机名"
         fi
     fi
-    if [ -n "$_minio_net" ] && [ "$_minio_net" != "$_mysql_net" ]; then
-        if docker network connect "$_minio_net" "$_backend_cid" 2>/dev/null; then
-            ok "bah-api/backend 已加入 MinIO 网络: ${_minio_net}"
-        else
-            ok "bah-api/backend 已在 MinIO 网络 ${_minio_net}（或无需重复连接）"
+    _minio_host=$(printf '%s' "$_minio_endpoint" | sed -E 's|^[a-zA-Z][a-zA-Z0-9+.-]*://||; s|[:/].*||')
+    if _needs_docker_dns "$_minio_host"; then
+        _minio_net=$(_docker_net_for_service "$_minio_host") || _minio_net=""
+        if [ -n "$_minio_net" ] && [ "$_minio_net" != "${_mysql_net:-}" ]; then
+            docker network connect "$_minio_net" "$_backend_cid" 2>/dev/null \
+                && ok "bah-api 已加入 MinIO 网络: ${_minio_net}" \
+                || ok "bah-api 已在 MinIO 网络 ${_minio_net}"
         fi
     fi
 fi
@@ -526,51 +484,6 @@ WHERE p.name = 'oa.communicate_todos'
     WHERE s.pipeline_id = p.id
       AND s.trigger_type = 'interval'
       AND s.interval_seconds = 600
-  );
-
--- 默认调度：每天 06:00（北京时间）采集前一日的港航信息。
--- 时区换算（容器无 TZ 设置，APScheduler 与 today 解析均按 UTC）：
---   北京 06:00 = UTC 前一天 22:00，故 cron_expr = '0 22 * * *'；
---   触发瞬间 UTC 日历日（如 7-30）恰是北京刚结束的那一天（北京已是 7-31 06:00），
---   因此 start/end 必须用 today（UTC 当日 = 北京昨天）——若照搬 08:00 版本的
---   today-1，会解析成北京"前天"，系统性错一天。
---   result_summary.period 显示的日期即北京"前一天"，核对语义不变。
---   若容器日后设 TZ=Asia/Shanghai，需把 cron_expr 改为 '0 6 * * *'、start/end 改为 today-1。
--- 采前一天而非当天 23 点：窗口完整闭合，23:00~24:00 发布的文章不会系统性遗漏；
---   当天 0~6 点的文章次日作为"昨天"被采，T+1 内全部入库（月刊无时效压力）。
--- sources 省略 = 全部信源：执行时刻展开为 sources.json 全量，后续新增信源自动纳入，免维护。
--- 迁移：本任务由此前 08:00（UTC '0 0 * * *'）版本调整为 06:00；若旧调度已随先前
---   部署入库，先删除避免双跑同一窗口（幂等，无旧行则无影响）。
--- 幂等：已存在「同 pipeline + 同 cron_expr」的调度时不再插入。
--- 重试：失败 10 分钟后自动重试 1 次（无人值守任务的网络抖动兜底）。
-DELETE s FROM schedules s
-JOIN pipelines p ON p.id = s.pipeline_id
-WHERE p.name = 'port_maritime_info.harvest'
-  AND s.trigger_type = 'cron'
-  AND s.cron_expr = '0 0 * * *';
-
-INSERT INTO schedules
-  (id, pipeline_id, name, trigger_type, cron_expr, config_override, enabled, max_retries, retry_delay_seconds)
-SELECT
-  UUID(),
-  p.id,
-  '每日06:00采集前一日港航信息',
-  'cron',
-  '0 22 * * *',
-  JSON_OBJECT(
-    'start_date', 'today',
-    'end_date', 'today'
-  ),
-  1,
-  1,
-  600
-FROM pipelines p
-WHERE p.name = 'port_maritime_info.harvest'
-  AND NOT EXISTS (
-    SELECT 1 FROM schedules s
-    WHERE s.pipeline_id = p.id
-      AND s.trigger_type = 'cron'
-      AND s.cron_expr = '0 22 * * *'
   );
 SEED_SQL
 

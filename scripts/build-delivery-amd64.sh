@@ -6,7 +6,7 @@
 #   - browser-auto-hub-backend.tar.gz          # docker save（标准 load）
 #   - browser-auto-hub-frontend.tar.gz         # docker save（优先 load）
 #   - browser-auto-hub-frontend-rootfs.tar     # docker export（load 失败时 import 兜底）
-#   - deploy.sh / docker-compose.prod.yml / .env.docker / env.txt / 文档
+#   - deploy.sh / docker-compose.prod.yml 来自仓库 交付包/（不再从旧交付包 patch）
 #
 # Compose 服务名：bah-api / bah-web（镜像 tag 仍为 *-backend / *-frontend）
 # DATABASE_URL 驱动：mysql+aiomysql（本服务依赖 aiomysql，勿用 Himea 的 asyncmy）
@@ -54,7 +54,8 @@ _pnpm() {
 command -v docker >/dev/null || die "需要 Docker"
 [ -d "$BAH_REPO" ] || die "源码目录不存在: $BAH_REPO"
 [ -f "$BAH_REPO/docker/Dockerfile.backend" ] || die "缺少 Dockerfile.backend"
-[ -d "$BAH_OLD_PKG" ] || die "旧交付包目录不存在（复制 deploy/docs）: $BAH_OLD_PKG"
+[ -f "$BAH_REPO/交付包/deploy.sh" ] || die "缺少 交付包/deploy.sh"
+[ -f "$BAH_REPO/交付包/docker-compose.prod.yml" ] || die "缺少 交付包/docker-compose.prod.yml"
 
 mkdir -p "$BAH_OUT"
 cd "$BAH_REPO"
@@ -174,143 +175,44 @@ docker rm "$_cid" >/dev/null
     > SHA256SUMS.txt
 )
 
-# ── 5. 组装交付目录（compose/deploy/docs + 青岛港 env）──
-log "复制并 patch 部署文件"
-for f in deploy.sh docker-compose.prod.yml README.md 镜像部署方案.md \
-         OA流水线API触发指南.md OA流水线CURL调用手册.md 局域网HTTP调用速查.md; do
-  [ -f "$BAH_OLD_PKG/$f" ] && cp -f "$BAH_OLD_PKG/$f" "$BAH_OUT/"
-done
+# ── 5. 组装交付目录（仓库 交付包/ 为 compose/deploy 唯一来源，不再 patch）──
+log "复制部署文件（来自仓库 交付包/）"
+cp -f "$BAH_REPO/交付包/deploy.sh" "$BAH_OUT/deploy.sh"
+cp -f "$BAH_REPO/交付包/docker-compose.prod.yml" "$BAH_OUT/docker-compose.prod.yml"
+chmod +x "$BAH_OUT/deploy.sh"
+if [ -f "$BAH_REPO/交付包/env.docker.example" ]; then
+  cp -f "$BAH_REPO/交付包/env.docker.example" "$BAH_OUT/env.txt"
+  cp -f "$BAH_REPO/交付包/env.docker.example" "$BAH_OUT/.env.docker.example"
+fi
 
-# 一次性 patch：服务名 + frontend rootfs import 兜底（ENTRYPOINT 勿多转义）
-python3 - <<'PY'
-from pathlib import Path
-import os
-import re
+# 文档仍可从旧交付包带上（可选）
+if [ -d "$BAH_OLD_PKG" ]; then
+  for f in README.md 镜像部署方案.md \
+           OA流水线API触发指南.md OA流水线CURL调用手册.md 局域网HTTP调用速查.md; do
+    [ -f "$BAH_OLD_PKG/$f" ] && cp -f "$BAH_OLD_PKG/$f" "$BAH_OUT/"
+  done
+else
+  log "未找到旧交付包目录 $BAH_OLD_PKG，跳过文档复制"
+fi
 
-out = Path(os.environ["BAH_OUT"])
-
-# compose: backend/frontend → bah-api/bah-web
-compose = out / "docker-compose.prod.yml"
-if compose.exists():
-    text = compose.read_text(encoding="utf-8")
-    text = text.replace("\n  backend:\n", "\n  bah-api:\n")
-    text = text.replace("\n  frontend:\n", "\n  bah-web:\n")
-    text = text.replace("\n      - backend\n", "\n      - bah-api\n")
-    compose.write_text(text, encoding="utf-8")
-    print(f"patched {compose}")
-
-deploy = out / "deploy.sh"
-if not deploy.exists():
-    raise SystemExit(f"missing {deploy}")
-
-text = deploy.read_text(encoding="utf-8")
-
-# 容器名 / 日志
-text = text.replace("name=browser-auto-hub-backend", "name=browser-auto-hub-bah-api")
-text = text.replace("logs backend", "logs bah-api")
-text = text.replace('ok "backend 已加入', 'ok "bah-api 已加入')
-text = text.replace('ok "backend 已在', 'ok "bah-api 已在')
-
-# 替换 _load_image：backend 走 docker load；frontend 一律 rootfs import
-# （客户机 Docker 20.10 上 frontend tar.gz 常 invalid diffID；load「成功」也可能未换掉旧层）
-new_load = r'''_load_image() {
-    local tar="$1" name="$2"
-    [ -f "$tar" ] || fail "镜像文件缺失: $tar"
-
-    # frontend：强制 rootfs import，避免旧 Docker load 失败/假成功导致页面不更新
-    if [ "$name" = "browser-auto-hub-frontend:latest" ]; then
-        local rootfs="browser-auto-hub-frontend-rootfs.tar"
-        [ -f "$rootfs" ] || fail "缺少 frontend rootfs: $rootfs"
-        docker rmi "$name" >/dev/null 2>&1 || true
-        docker import \
-          --change 'ENTRYPOINT ["/docker-entrypoint.sh"]' \
-          --change 'CMD ["nginx","-g","daemon off;"]' \
-          --change 'EXPOSE 80' \
-          "$rootfs" "$name" >/dev/null
-        ok "$name 已通过 rootfs import 导入"
-        return 0
-    fi
-
-    if docker load -i "$tar"; then
-        ok "$name 已加载"
-        return 0
-    fi
-    fail "$name 导入失败"
-}'''
-
-pat = re.compile(
-    r"_load_image\(\)\s*\{.*?\n\}\n(?=_load_image browser-auto-hub-backend)",
-    re.DOTALL,
-)
-if not pat.search(text):
-    raise SystemExit("deploy.sh: 未能定位 _load_image 函数，请检查模板")
-text = pat.sub(new_load + "\n", text, count=1)
-
-# compose up 强制重建，避免 tag 未变时继续跑旧容器
-text = text.replace(
-    "_compose -f docker-compose.prod.yml --env-file .env.docker up -d\n",
-    "_compose -f docker-compose.prod.yml --env-file .env.docker up -d --force-recreate --remove-orphans\n",
-)
-# 幂等：已带 force-recreate 则不再重复替换
-if "--force-recreate" not in text:
-    raise SystemExit("deploy.sh: 未能给 compose up 加上 --force-recreate")
-
-deploy.write_text(text, encoding="utf-8")
-# 校验补丁真的写进去了
-verify = deploy.read_text(encoding="utf-8")
-if "browser-auto-hub-frontend-rootfs.tar" not in verify or "rootfs import" not in verify:
-    raise SystemExit("deploy.sh patch 校验失败：未包含 frontend rootfs import")
-if "--force-recreate" not in verify:
-    raise SystemExit("deploy.sh patch 校验失败：未包含 --force-recreate")
-print(f"patched {deploy}")
-PY
-
-# 青岛港 .env.docker（aiomysql，勿用 asyncmy）
-cat > "$BAH_OUT/.env.docker" <<'ENV'
-# Browser Auto Hub — 青岛港离线环境模板（deploy.sh + compose 共用）
-# 部署前替换 CHANGE_ME_*；密码与 Himea himea-offline/.env 对齐
-# ★ 驱动必须是 aiomysql（本镜像依赖）；勿抄 Himea 的 mysql+asyncmy
-
+# 青岛港 .env.docker 模板（无真实密钥；升级时勿覆盖客户机已填好的文件）
+if [ -f "$BAH_REPO/交付包/env.docker.example" ]; then
+  cp -f "$BAH_REPO/交付包/env.docker.example" "$BAH_OUT/.env.docker"
+else
+  cat > "$BAH_OUT/.env.docker" <<'ENV'
 DATABASE_URL=mysql+aiomysql://himea:CHANGE_ME_himea@mysql:3306/himea?charset=utf8mb4
-
 MINIO_ENDPOINT=http://minio:9000
 MINIO_ACCESS_KEY=himea
 MINIO_SECRET_KEY=CHANGE_ME_minio
 MINIO_BUCKET=himea-skills
 MINIO_OBJECT_PREFIX=attachments
-
 PUBLIC_BASE_URL=http://10.236.3.186:8901
-
 BACKEND_PORT=8901
 FRONTEND_PORT=3201
-
 TABLE_inbox_documents=skill_custom_inbox_documents
+TABLE_ganghang_materials=documents
 ENV
-
-# Finder 可见副本
-cat > "$BAH_OUT/env.txt" <<'ENV'
-# Browser Auto Hub — 青岛港部署配置模板（Finder 可见副本）
-#
-# 用法：
-#   cp env.txt .env.docker
-#   vim .env.docker          # 替换 CHANGE_ME_*；驱动保持 aiomysql
-#   ./deploy.sh
-
-DATABASE_URL=mysql+aiomysql://himea:CHANGE_ME_himea@mysql:3306/himea?charset=utf8mb4
-
-MINIO_ENDPOINT=http://minio:9000
-MINIO_ACCESS_KEY=himea
-MINIO_SECRET_KEY=CHANGE_ME_minio
-MINIO_BUCKET=himea-skills
-MINIO_OBJECT_PREFIX=attachments
-
-PUBLIC_BASE_URL=http://10.236.3.186:8901
-
-BACKEND_PORT=8901
-FRONTEND_PORT=3201
-
-TABLE_inbox_documents=skill_custom_inbox_documents
-ENV
+fi
 
 # 文档补充（幂等 append）
 if [ -f "$BAH_OUT/镜像部署方案.md" ]; then
@@ -333,7 +235,8 @@ DOC
 
 - 若 `browser-auto-hub-frontend.tar.gz` 在客户机 `docker load` 报 `invalid diffID`，
   `deploy.sh` 会自动改用 `browser-auto-hub-frontend-rootfs.tar` 执行 `docker import`，无需手工处理。
-- 升级时一般只需覆盖镜像 tar / rootfs / deploy.sh，**保留客户机已填好的 `.env.docker`**。
+- 升级时覆盖 `deploy.sh` / `docker-compose.prod.yml` / 镜像 tar，**保留客户机已填好的 `.env.docker`**。
+- RHEL7 上 `bah-web` 需要 compose 中的 `security_opt: seccomp:unconfined` + `label:disable`，否则 nginx pwrite(pid) 会 EPERM。
 DOC
   fi
 fi
